@@ -73,52 +73,104 @@ export function nextPayDate(card, after) {
 
 /* ---------- バイト代 ---------- */
 
-const r2 = x => Math.round(x * 100) / 100;
-const todayDate = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+/* ---- 時刻・時間（H:MM） ---- */
 
-// 勤務時間の記録を締め月ごとに集計 → Map('YYYY-MM' => { hours, days })
-export function logTotals(job) {
+// "17:30" / "1730" / "17" / "１７：３０" → 1050（分）。不正な値は null
+export function parseHM(v) {
+  const t = String(v ?? '').trim()
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[：.]/g, ':');
+  let h, m;
+  let x = /^(\d{1,2}):(\d{2})$/.exec(t);
+  if (x) { h = +x[1]; m = +x[2]; }
+  else if ((x = /^(\d{1,2})(\d{2})$/.exec(t))) { h = +x[1]; m = +x[2]; }
+  else if ((x = /^(\d{1,2})$/.exec(t))) { h = +x[1]; m = 0; }
+  else return null;
+  if (h > 24 || m > 59 || (h === 24 && m > 0)) return null;
+  return h * 60 + m;
+}
+// 分 → "4:30"
+export const fmtHM = min => { const t = Math.round(Math.abs(min || 0)); return `${min < 0 ? '−' : ''}${Math.floor(t / 60)}:${pad(t % 60)}`; };
+// 入力を "H:MM" にそろえる（不正なら null）
+export const normHM = v => { const m = parseHM(v); return m == null ? null : fmtHM(m); };
+
+// 開始〜終了の分数。終了が開始以前なら日付をまたぐ勤務として扱う
+export function spanMin(start, end) {
+  const a = parseHM(start), b = parseHM(end);
+  if (a == null || b == null) return 0;
+  let d = b - a;
+  if (d <= 0) d += 1440;
+  return d;
+}
+
+// 休憩と上限のルール（分）。初期値：8時間を超えたら1時間休憩、1日の上限7時間
+export const DEFAULT_RULES = { breakOver: 480, breakMin: 60, maxMin: 420 };
+export function rulesOf(job) { return { ...DEFAULT_RULES, ...(job && job.rules || {}) }; }
+
+// 拘束時間 → 労働時間
+export function workedFromSpan(span, rules = DEFAULT_RULES) {
+  let w = span;
+  if (rules.breakOver > 0 && w > rules.breakOver) w -= rules.breakMin;
+  if (rules.maxMin > 0) w = Math.min(w, rules.maxMin);
+  return Math.max(0, w);
+}
+
+// 1回のシフト（分）：planned = 予定どおり働いた場合、worked = 実際、lost = 休み・早退で減った分
+//   status: 'work'（通常）| 'off'（休み）| 'early'（早退。leftAt = 実際に上がった時刻）
+export function shiftMinutes(s, rules = DEFAULT_RULES) {
+  const span = spanMin(s.start, s.end);
+  const planned = workedFromSpan(span, rules);
+  if (s.status === 'off') return { span, planned, worked: 0, lost: planned };
+  if (s.status === 'early' && parseHM(s.leftAt) != null) {
+    const worked = Math.min(planned, workedFromSpan(Math.min(span, spanMin(s.start, s.leftAt)), rules));
+    return { span, planned, worked, lost: planned - worked };
+  }
+  return { span, planned, worked: planned, lost: 0 };
+}
+
+// シフトを締め月ごとに集計 → Map('YYYY-MM' => { planned, worked, lost, days, off, early })
+export function shiftTotals(job) {
   const map = new Map();
-  for (const l of job.logs || []) {
-    const d = parseDate(l.date), h = +l.hours;
-    if (!d || !h) continue;
+  const rules = rulesOf(job);
+  for (const s of job.shifts || []) {
+    const d = parseDate(s.date);
+    if (!d) continue;
     const k = ym(closingMonth(d, job.close));
-    const o = map.get(k) || { hours: 0, dates: new Set() };
-    o.hours = r2(o.hours + h); o.dates.add(l.date);
+    const o = map.get(k) || { planned: 0, worked: 0, lost: 0, days: 0, off: 0, early: 0 };
+    const m = shiftMinutes(s, rules);
+    o.planned += m.planned; o.worked += m.worked; o.lost += m.lost; o.days++;
+    if (s.status === 'off') o.off++;
+    if (s.status === 'early') o.early++;
     map.set(k, o);
   }
-  for (const o of map.values()) { o.days = o.dates.size; delete o.dates; }
   return map;
 }
 
 // 締め月 cm の勤務期間
 export function jobWindow(cm, job) { return windowForClosing(cm, { close: job.close }); }
 
-// その月の計算に使う労働時間
-//   記録がある → 記録の合計（予定より少なくても多くても）
-//   記録がない → その月の予定（空欄なら標準の労働時間）
-export function monthHours(job, cm, logs = logTotals(job), asOf = todayDate()) {
+// その月の計算に使う労働時間（時間単位）
+//   シフトを登録した月 → シフトの合計から休み・早退の分を引いた時間
+//   シフトがない月     → その月の予定（空欄なら標準の労働時間）
+export function monthHours(job, cm, totals = shiftTotals(job)) {
   const m = (job.months || {})[ym(cm)] || {};
-  const planned = m.hours ?? (+job.hours || 0);
-  const rec = logs.get(ym(cm));
-  const closed = dayIn(cm.getFullYear(), cm.getMonth(), job.close) < asOf;
-  if (rec) return { hours: rec.hours, planned, recorded: rec.hours, days: rec.days, source: 'recorded', closed };
-  return { hours: planned, planned, recorded: 0, days: 0, source: m.hours != null ? 'planned' : 'default', closed };
+  const t = totals.get(ym(cm));
+  if (t) return { hours: t.worked / 60, source: 'shift', shift: t };
+  return { hours: m.hours ?? (+job.hours || 0), source: m.hours != null ? 'planned' : 'default', shift: null };
 }
 
 // (start, end] に支給されるバイト代。勤務月 = 締め月
-export function jobPayments(job, start, end, asOf = todayDate()) {
+export function jobPayments(job, start, end) {
   const out = [];
   const off = job.offset ?? 1;
   const wage = +job.wage || 0;
-  const logs = logTotals(job);
+  const totals = shiftTotals(job);
   for (let cm = new Date(start.getFullYear(), start.getMonth() - off - 1, 1);
        cm <= end;
        cm = new Date(cm.getFullYear(), cm.getMonth() + 1, 1)) {
     const pay = dayIn(cm.getFullYear(), cm.getMonth() + off, job.pay);
     if (!(pay > start && pay <= end)) continue;
     const m = (job.months || {})[ym(cm)] || {};
-    const h = monthHours(job, cm, logs, asOf);
+    const h = monthHours(job, cm, totals);
     const extra = m.extra ?? 0;
     const gross = Math.round(wage * h.hours);
     const amount = Math.round(gross * (1 - (+job.dedPct || 0) / 100)) + (+job.transport || 0) + extra;

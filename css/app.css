@@ -181,23 +181,73 @@ table:has(select.cell) { min-width: 880px; }
 .ch-min { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
 .ch-lbl { fill: var(--ink); font: 600 12px var(--mono); }
 
-/* ---- 勤務時間の記録 ---- */
+/* ---- シフト（カレンダー） ---- */
 .sub-h { font-family: var(--mono); font-size: .8rem; color: var(--sub); }
-.logform { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 8em) minmax(0, 1fr) auto; gap: 10px 12px; align-items: end; }
-@media (max-width: 620px) { .logform { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .logform .grow, .logform .end { grid-column: 1 / -1; } .logform .end .btn { width: 100%; } }
-.lg { border: 1px solid var(--line); min-width: 0; }
-.block > * { min-width: 0; }
-.lg + .lg { margin-top: -1px; }
-.lg summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; padding: 8px 12px; background: var(--fill); list-style: none; }
-.lg summary::-webkit-details-marker { display: none; }
-.lg summary::before { content: "+"; font-family: var(--mono); width: 1em; }
-.lg[open] summary::before { content: "−"; }
-.lg-m { font-weight: 700; }
-.lg-r { font-family: var(--mono); font-size: .8rem; color: var(--sub); }
-.lg-t { margin-left: auto; font-family: var(--mono); font-weight: 700; }
-.lg .tablewrap { border: 0; border-top: 1px solid var(--line); }
-table.logs { min-width: 460px; }
-.empty-line { margin: 0; color: var(--sub); font-size: .85rem; }
+.cal-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cal-nav strong { min-width: 8.5em; text-align: center; font-size: 1rem; }
+.cal-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 320px); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .cal-wrap { grid-template-columns: minmax(0, 1fr); } }
+.cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+.dow { font-size: .72rem; color: var(--sub); text-align: center; padding: 4px 0; background: var(--fill); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.dow.we, .day.we .dn { color: var(--dim); }
+.day {
+  font: inherit; color: var(--ink); background: var(--surface); cursor: pointer; text-align: left;
+  border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  min-height: 76px; padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow: hidden;
+}
+.day:hover { background: var(--bg); }
+.day.out { background: var(--bg); }
+.day.out .dn, .day.out .st, .day.out .wh { opacity: .45; }
+.dn { font-family: var(--mono); font-size: .8rem; display: flex; justify-content: space-between; align-items: center; }
+.day.today .dn { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.cl { font-style: normal; font-size: .62rem; border: 1px solid var(--sub); color: var(--sub); padding: 0 2px; line-height: 1.3; }
+.st { font-family: var(--mono); font-size: .72rem; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st b { font-weight: 600; } .st i { font-style: normal; color: var(--sub); }
+.wh { font-family: var(--mono); font-size: .78rem; font-weight: 700; margin-top: auto; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.wh em { font-style: normal; font-size: .62rem; font-weight: 700; background: var(--fill); padding: 0 3px; }
+.day.has { background: var(--surface); box-shadow: inset 3px 0 0 var(--ink); }
+.day.off { box-shadow: inset 3px 0 0 var(--dim); }
+.day.off .st { text-decoration: line-through; color: var(--dim); }
+.day.off .wh { color: var(--sub); font-weight: 500; }
+.day.early { box-shadow: inset 3px 0 0 var(--sub); }
+.day.sel { outline: 2px solid var(--ink); outline-offset: -2px; position: relative; z-index: 1; }
+@media (max-width: 620px) {
+  .day { min-height: 58px; padding: 3px 3px; }
+  .st i { display: none; }
+  .st { font-size: .66rem; } .wh { font-size: .7rem; }
+  .cal-nav strong { min-width: 0; flex: 1; }
+}
+.editor { border: 1px solid var(--ink); padding: 14px; display: grid; gap: 12px; background: var(--surface); }
+.editor h3 { margin: 0; font-size: .95rem; }
+.muted { margin: 0; color: var(--sub); font-size: .85rem; }
+.fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+input.hm { font-family: var(--mono); font-size: 1.05rem; }
+.seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--ink); }
+.seg-b { font: inherit; font-size: .88rem; background: var(--surface); color: var(--ink); border: 0; border-left: 1px solid var(--ink); padding: 7px 4px; cursor: pointer; }
+.seg-b:first-child { border-left: 0; }
+.seg-b[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 700; }
+.calc { margin: 0; display: grid; gap: 2px; font-size: .85rem; }
+.calc div { display: flex; justify-content: space-between; gap: 8px; }
+.calc dt { color: var(--sub); } .calc dd { margin: 0; font-family: var(--mono); }
+.calc .total { border-top: 1px solid var(--ink); padding-top: 4px; margin-top: 2px; font-weight: 700; }
+.calc .total dt { color: var(--ink); }
+.editor .actions .btn { flex: 1 1 auto; }
+td.unused input { opacity: .45; }
+
+/* ---- 同期 ---- */
+.syncbar:empty { display: none; }
+.syncbar-in { margin-top: 12px; border: 2px solid var(--ink); background: var(--surface); padding: 12px 14px; display: grid; gap: 10px; }
+.syncbar-in p { margin: 0; } .syncbar-in strong { margin-right: 8px; }
+.syncbar-in input { width: auto; flex: 1 1 14em; }
+.kv { margin: 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.kv span { font-size: .76rem; color: var(--sub); }
+code { font-family: var(--mono); font-size: .85em; background: var(--fill); padding: 1px 5px; overflow-wrap: anywhere; }
+.steps { margin: 0; padding-left: 1.4em; display: grid; gap: 4px; font-size: .85rem; max-width: 72ch; }
+.lock { gap: 16px; align-content: center; }
+.join { padding: 14px 24px; }
+.join summary { cursor: pointer; font-size: .9rem; }
+.join[open] summary { margin-bottom: 12px; }
+.join-form { display: grid; gap: 12px; }
 
 /* ---- 年間 ---- */
 .years { display: grid; gap: 14px; }

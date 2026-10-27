@@ -61,25 +61,42 @@ const S3 = structuredClone(S); S3.job.months['2026-11'] = { hours: 80, extra: 20
 const p = M.jobPayments(S3.job, d('2026-10-19'), d('2027-01-31'));
 assert.deepEqual(p.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 60000], ['2026-12-15', 82000], ['2027-01-15', 60000]]);
 
-// 勤務時間の記録
-const J = { wage: 1000, hours: 60, close: 31, pay: 15, offset: 1, months: { '2026-11': { hours: 50 } },
-  logs: [{ date: '2026-10-03', hours: 5 }, { date: '2026-10-10', hours: 4.5 }, { date: '2026-10-10', hours: 1 },
-         { date: '2026-11-02', hours: 6 }, { date: '2026-12-01', hours: 70 }] };
-const asOf = d('2026-11-05');
-const L = M.logTotals(J);
-assert.deepEqual(L.get('2026-10'), { hours: 10.5, days: 2 });
-// 記録がある月は、締め前でも予定より少なくても多くても記録の合計
-assert.equal(M.monthHours(J, d('2026-10-01'), L, asOf).hours, 10.5);
-assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).hours, 6);
-assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).source, 'recorded');
-assert.equal(M.monthHours(J, d('2026-12-01'), L, asOf).hours, 70);
-// 記録なし → 標準
-assert.equal(M.monthHours(J, d('2027-01-01'), L, asOf).source, 'default');
-assert.equal(M.monthHours(J, d('2027-01-01'), L, asOf).hours, 60);
-const jp = M.jobPayments(J, d('2026-11-05'), d('2027-02-28'), asOf);
-assert.deepEqual(jp.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 10500], ['2026-12-15', 6000], ['2027-01-15', 70000], ['2027-02-15', 60000]]);
-// 15日締め：10/16 は 11月締めの勤務
-assert.equal(M.ym(M.closingMonth(d('2026-10-16'), 15)), '2026-11');
+// 時刻
+assert.equal(M.parseHM('17:30'), 1050); assert.equal(M.parseHM('0:45'), 45); assert.equal(M.parseHM('9:75'), null);
+assert.equal(M.parseHM('1730'), 1050); assert.equal(M.parseHM('9'), 540); assert.equal(M.parseHM('１７：３０'), 1050);
+assert.equal(M.fmtHM(270), '4:30'); assert.equal(M.normHM('930'), '9:30');
+// 休憩と上限：8時間を超えたら1時間休憩、上限7時間
+const sm = (a, b, x = {}) => M.shiftMinutes({ start: a, end: b, ...x });
+assert.equal(sm('17:00', '21:30').worked, 270);
+assert.equal(sm('9:00', '16:00').worked, 420);   // 7h
+assert.equal(sm('9:00', '16:30').worked, 420);   // 7.5h → 上限 7h
+assert.equal(sm('9:00', '17:00').worked, 420);   // 8h → 上限 7h
+assert.equal(sm('9:00', '18:00').worked, 420);   // 9h → 休憩1h → 8h → 上限 7h
+assert.equal(sm('22:00', '2:00').worked, 240);   // 日付またぎ
+// 休み・早退
+assert.deepEqual(sm('17:00', '21:00', { status: 'off' }), { span: 240, planned: 240, worked: 0, lost: 240 });
+assert.deepEqual(sm('10:00', '19:00', { status: 'early', leftAt: '14:00' }), { span: 540, planned: 420, worked: 240, lost: 180 });
+assert.equal(sm('10:00', '19:00', { status: 'early', leftAt: '18:30' }).worked, 420); // 上限内なので減らない
+assert.equal(sm('17:00', '21:00', { status: 'early' }).worked, 240); // 時刻未入力なら通常扱い
+// ルールを変えた場合
+assert.equal(M.shiftMinutes({ start: '9:00', end: '18:00' }, { breakOver: 360, breakMin: 45, maxMin: 0 }).worked, 495);
+
+const J = { wage: 1000, hours: 60, close: 31, pay: 15, offset: 1, months: { '2026-12': { hours: 30 } },
+  shifts: [
+    { date: '2026-11-02', start: '17:00', end: '21:00' },
+    { date: '2026-11-04', start: '17:00', end: '21:00', status: 'off' },
+    { date: '2026-11-09', start: '10:00', end: '19:00', status: 'early', leftAt: '14:00' },
+    { date: '2026-11-16', start: '17:00', end: '22:30' },
+  ] };
+const T = M.shiftTotals(J).get('2026-11');
+assert.deepEqual(T, { planned: 240 + 240 + 420 + 330, worked: 240 + 0 + 240 + 330, lost: 240 + 180, days: 4, off: 1, early: 1 });
+// 11月：シフトあり → 810分 = 13.5h。12月：シフトなし → 予定 30h。1月：標準 60h
+const jp = M.jobPayments(J, d('2026-11-20'), d('2027-02-28'));
+assert.deepEqual(jp.map(x => [M.iso(x.pay), x.source, x.amount]),
+  [['2026-12-15', 'shift', 13500], ['2027-01-15', 'planned', 30000], ['2027-02-15', 'default', 60000]]);
+// 15日締めなら 11/16 のシフトは 12月締めの勤務
+const T15 = M.shiftTotals({ ...J, close: 15 });
+assert.equal(T15.get('2026-12').worked, 330); assert.equal(T15.get('2026-11').worked, 480);
 
 // 比較：給料日(2/15)の後に引き落とされる固定費カード 2/26 払いが最も余裕がある
 const S4 = structuredClone(S); S4.purchases = S4.purchases.slice(0, 1);

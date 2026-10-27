@@ -45,3 +45,9 @@ export async function open(vault, password) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(vault.iv), additionalData: AAD }, key, fromB64(vault.ct));
   return { key, kdf: vault.kdf, data: JSON.parse(dec.decode(pt)) };
 }
+
+// 同じパスワード・同じソルトで作られた vault を、手元の鍵で開く
+export async function openWithKey(vault, key) {
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(vault.iv), additionalData: AAD }, key, fromB64(vault.ct));
+  return JSON.parse(dec.decode(pt));
+}
