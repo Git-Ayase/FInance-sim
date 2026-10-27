@@ -106,4 +106,20 @@ assert.equal(best.card.id, 'f'); assert.equal(M.iso(best.payDate), '2027-02-26')
 assert.equal(best.min.balance, 74077);
 assert.equal(res.find(r => r.card.id === 'o' && M.iso(r.payDate) === '2027-02-04').min.balance, 61697);
 
+// ローン：毎月27日、12回、ボーナス月(12月)に加算
+const loan = { name: 'PC', amount: 10000, day: 27, first: '2026-10', count: 12, bonusAmount: 5000, bonusM1: 12 };
+const sch = M.loanSchedule(loan);
+assert.equal(sch.length, 12); assert.equal(M.iso(sch[0].date), '2026-10-27'); assert.equal(M.iso(sch[11].date), '2027-09-27');
+assert.equal(sch[2].amount, 15000); // 12月
+const ls = M.loanStatus(loan, d('2026-10-27'));
+assert.deepEqual([ls.done, ls.remainCount, ls.remainTotal, M.iso(ls.last)], [1, 11, 115000, '2027-09-27']);
+// 2月は28日までなので月末に寄せる（day 31）
+assert.equal(M.iso(M.loanSchedule({ amount: 1, day: 31, first: '2027-02', count: 1 })[0].date), '2027-02-28');
+// シミュレーションに入る
+const SL = structuredClone(S); SL.loans = [loan];
+const lr = M.simulate(SL).rows.filter(r => r.kind === 'loan');
+assert.deepEqual(lr.map(r => [M.iso(r.date), r.amount]), [['2026-10-27', -10000], ['2026-11-27', -10000], ['2026-12-27', -15000], ['2027-01-27', -10000], ['2027-02-27', -10000]]);
+// 回数未定は期間の終わりまで
+assert.equal(M.loanSchedule({ amount: 1, day: 1, first: '2026-11' }, d('2027-01-31')).length, 3);
+
 console.log('all tests passed');

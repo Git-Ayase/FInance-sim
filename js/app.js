@@ -16,7 +16,7 @@ const fmtMD = d => `${d.getMonth() + 1}/${d.getDate()}`;
 const fmtYM = d => `${d.getFullYear()}年${d.getMonth() + 1}月`;
 const today = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
 const uid = () => crypto.randomUUID().slice(0, 8);
-const KIND = { income: '収入', bill: '確定した請求', recurring: '毎月の見込み', purchase: '大きい買い物' };
+const KIND = { income: '収入', bill: '確定した請求', recurring: '毎月の見込み', purchase: '大きい買い物', loan: 'ローン' };
 const OFFSETS = [[0, '当月'], [1, '翌月'], [2, '翌々月']];
 const COUNTS = [1, 2, 3, 5, 6, 10, 12, 24];
 
@@ -63,7 +63,7 @@ function seed() {
       { id: uid(), name: '固定費カード', close: 31, pay: 26, offset: 1 },
       { id: uid(), name: 'その他カード', close: 5, pay: 4, offset: 1 },
     ],
-    bills: [], recurring: [], purchases: [],
+    bills: [], recurring: [], purchases: [], loans: [],
     prefs: { lockMin: 5 },
   };
 }
@@ -77,7 +77,7 @@ function migrate(d) {
   o.job.rules = { ...M.DEFAULT_RULES, ...(o.job.rules || {}) };
   delete o.job.logs;
   o.prefs = { ...s.prefs, ...(d.prefs || {}) };
-  for (const k of ['cards', 'bills', 'recurring', 'purchases']) o[k] = Array.isArray(d[k]) ? d[k] : s[k];
+  for (const k of ['cards', 'bills', 'recurring', 'purchases', 'loans']) o[k] = Array.isArray(d[k]) ? d[k] : s[k];
   return o;
 }
 
@@ -670,6 +670,38 @@ function viewCards(sim) {
         : `<tr><td colspan="6" class="empty">固定費や、毎月だいたいこのくらい使う額を入れておくと、先の月まで予測できます。</td></tr>`}</tbody>
     </table></div>
     <p class="note">開始月・終了月は引き落としの月です。終了月が空欄なら計算期間の最後まで続きます。</p>
+  </section>
+  ${loanSection(base)}`;
+}
+
+const MONTHS = [[0, 'なし'], ...Array.from({ length: 12 }, (_, i) => [i + 1, `${i + 1}月`])];
+function loanSection(base) {
+  const sel = (l, f) => `<select id="loans-${l.id}-${f}" class="cell" data-list="loans" data-id="${l.id}" data-f="${f}" data-type="num" aria-label="ボーナス月">${MONTHS.map(([k, t]) => `<option value="${k}"${k == (l[f] || 0) ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
+  const rows = S.loans.map(l => {
+    const st = M.loanStatus(l, base);
+    const remain = (l.count | 0)
+      ? (st.remainCount ? `${st.remainCount}回<small>${yen(st.remainTotal)}円</small>` : '<span class="chip ok">完済</span>')
+      : '<small>回数未定</small>';
+    return `<tr>
+      <td>${cellText('loans', l, 'name', '例：奨学金、PC')}</td>
+      <td class="n">${cellNum('loans', l, 'amount', 'min="0"')}</td>
+      <td class="n">${cellNum('loans', l, 'day', 'min="1" max="31"')}</td>
+      <td>${cell('loans', l, 'first', `type="month" value="${esc(l.first)}"`)}</td>
+      <td class="n">${cellNum('loans', l, 'count', 'min="0"')}</td>
+      <td class="n">${cellNum('loans', l, 'bonusAmount', 'min="0"')}</td>
+      <td class="bm">${sel(l, 'bonusM1')}${sel(l, 'bonusM2')}</td>
+      <td class="n">${remain}</td>
+      <td class="d">${st.next ? fmt(st.next.date) : '—'}</td>
+      <td class="d">${st.last ? fmt(st.last) : '—'}</td>
+      <td>${delBtn('loans', l, l.name || 'ローン')}</td></tr>`;
+  }).join('');
+  const sum = S.loans.reduce((a, l) => { const st = M.loanStatus(l, base); return { m: a.m + (st.remainCount ? +l.amount || 0 : 0), r: a.r + ((l.count | 0) ? st.remainTotal : 0) }; }, { m: 0, r: 0 });
+  return `<section class="block"><div class="head"><h2>ローン</h2>${S.loans.length ? `<span class="sub-h">毎月 ${yen(sum.m)}円・残り ${yen(sum.r)}円</span>` : ''}<button type="button" class="btn" data-act="add" data-list="loans">＋ ローンを追加</button></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>名前</th><th class="r">毎月の返済額</th><th class="r">引き落とし日</th><th>初回の月</th><th class="r">返済回数</th><th class="r">ボーナス月の加算</th><th>ボーナス月</th><th class="r">残り</th><th>次回</th><th>完済予定</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="11" class="empty">口座から引き落とされるローンや分割の返済を入れると、毎月の引き落としに加わります。</td></tr>'}</tbody>
+    </table></div>
+    <p class="note">口座から毎月引き落とされる返済です（カード払いの分割は「大きい買い物」で入れます）。返済回数は初回からの合計で、0 にすると計算期間の最後まで続きます。残りは基準日より後の回数と金額です。</p>
   </section>`;
 }
 
@@ -888,6 +920,7 @@ function addItem(list) {
   const id = uid();
   if (list === 'cards') S.cards.push({ id, name: '新しいカード', close: 15, pay: 10, offset: 1 });
   if (list === 'bills') S.bills.push({ id, card: c0?.id || '', date: M.iso(c0 ? M.nextPayDate(c0, base) : base), amount: 0, memo: '' });
+  if (list === 'loans') S.loans.push({ id, name: '', amount: 0, day: 27, first: M.ym(new Date(base.getFullYear(), base.getMonth() + (base.getDate() >= 27 ? 1 : 0), 1)), count: 12, bonusAmount: 0, bonusM1: 0, bonusM2: 0 });
   if (list === 'recurring') S.recurring.push({ id, card: c0?.id || '', amount: 0, from: M.ym(M.addDays(base, 1)), to: '', memo: '' });
   if (list === 'purchases') S.purchases.push({ id, label: '', amount: 0, card: c0?.id || '', payDate: c0 ? M.iso(M.payOptions(c0, purchaseFrom(), 1)[0].payDate) : '', count: 1, feePct: 0 });
   return id;

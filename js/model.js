@@ -195,6 +195,38 @@ export function yearTotals(S, start, end) {
   });
 }
 
+/* ---------- ローン ---------- */
+
+// 返済の予定 → [{ n, date, amount }]。count が 0 なら回数未定（until まで続ける）
+export function loanSchedule(loan, until) {
+  const first = parseDate(loan.first ? loan.first + '-01' : '');
+  if (!first || !(+loan.amount || +loan.bonusAmount)) return [];
+  const count = Math.max(0, loan.count | 0);
+  const bonus = [loan.bonusM1, loan.bonusM2].map(Number).filter(m => m >= 1 && m <= 12);
+  const out = [];
+  for (let i = 0; i < (count || 600); i++) {
+    const date = dayIn(first.getFullYear(), first.getMonth() + i, loan.day || 27);
+    if (!count && until && date > until) break;
+    const amount = (+loan.amount || 0) + (bonus.includes(date.getMonth() + 1) ? (+loan.bonusAmount || 0) : 0);
+    out.push({ n: i + 1, date, amount });
+  }
+  return out;
+}
+
+// asOf（基準日）時点での残り
+export function loanStatus(loan, asOf) {
+  const sch = loanSchedule(loan, null);
+  const rest = sch.filter(x => x.date > asOf);
+  return {
+    total: sch.length,
+    done: sch.length - rest.length,
+    remainCount: rest.length,
+    remainTotal: rest.reduce((a, x) => a + x.amount, 0),
+    next: rest[0] || null,
+    last: sch.length && (loan.count | 0) ? sch[sch.length - 1].date : null,
+  };
+}
+
 /* ---------- シミュレーション ---------- */
 
 export function simRange(S) {
@@ -252,6 +284,10 @@ export function simulate(S, extraPurchases = []) {
       ev.push({ date: d, amount: -r.amount, label: r.memo || '毎月の見込み', card: r.card, kind: 'recurring' });
     }
   }
+
+  for (const l of S.loans || [])
+    for (const x of loanSchedule(l, end))
+      if (inRange(x.date) && x.amount) ev.push({ date: x.date, amount: -x.amount, label: `${l.name || 'ローン'}${(l.count | 0) ? `（${x.n}/${l.count}回）` : ''}`, kind: 'loan' });
 
   for (const p of [...S.purchases, ...extraPurchases])
     for (const e of purchaseEvents(p, cards.get(p.card))) if (inRange(e.date)) ev.push(e);

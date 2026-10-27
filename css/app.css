@@ -233,6 +233,8 @@ input.hm { font-family: var(--mono); font-size: 1.05rem; }
 .calc .total dt { color: var(--ink); }
 .editor .actions .btn { flex: 1 1 auto; }
 td.unused input { opacity: .45; }
+td.bm { white-space: nowrap; }
+td.bm select.cell { min-width: 5.5em; width: auto; display: inline-block; }
 
 /* ---- 同期 ---- */
 .syncbar:empty { display: none; }
