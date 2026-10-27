@@ -73,22 +73,58 @@ export function nextPayDate(card, after) {
 
 /* ---------- バイト代 ---------- */
 
+const r2 = x => Math.round(x * 100) / 100;
+const todayDate = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
+
+// 勤務時間の記録を締め月ごとに集計 → Map('YYYY-MM' => { hours, days })
+export function logTotals(job) {
+  const map = new Map();
+  for (const l of job.logs || []) {
+    const d = parseDate(l.date), h = +l.hours;
+    if (!d || !h) continue;
+    const k = ym(closingMonth(d, job.close));
+    const o = map.get(k) || { hours: 0, dates: new Set() };
+    o.hours = r2(o.hours + h); o.dates.add(l.date);
+    map.set(k, o);
+  }
+  for (const o of map.values()) { o.days = o.dates.size; delete o.dates; }
+  return map;
+}
+
+// 締め月 cm の勤務期間
+export function jobWindow(cm, job) { return windowForClosing(cm, { close: job.close }); }
+
+// その月の計算に使う労働時間
+//   締め日を過ぎた月で記録がある → 記録の合計（実績）
+//   締め前の月で記録がある      → 予定と記録の多い方
+//   記録がない                  → 予定（空欄なら標準）
+export function monthHours(job, cm, logs = logTotals(job), asOf = todayDate()) {
+  const m = (job.months || {})[ym(cm)] || {};
+  const planned = m.hours ?? (+job.hours || 0);
+  const rec = logs.get(ym(cm));
+  const closed = dayIn(cm.getFullYear(), cm.getMonth(), job.close) < asOf;
+  if (rec && closed) return { hours: rec.hours, planned, recorded: rec.hours, days: rec.days, source: 'actual', closed };
+  if (rec) return { hours: Math.max(planned, rec.hours), planned, recorded: rec.hours, days: rec.days, source: rec.hours > planned ? 'over' : 'progress', closed };
+  return { hours: planned, planned, recorded: 0, days: 0, source: m.hours != null ? 'planned' : 'default', closed };
+}
+
 // (start, end] に支給されるバイト代。勤務月 = 締め月
-export function jobPayments(job, start, end) {
+export function jobPayments(job, start, end, asOf = todayDate()) {
   const out = [];
   const off = job.offset ?? 1;
   const wage = +job.wage || 0;
+  const logs = logTotals(job);
   for (let cm = new Date(start.getFullYear(), start.getMonth() - off - 1, 1);
        cm <= end;
        cm = new Date(cm.getFullYear(), cm.getMonth() + 1, 1)) {
     const pay = dayIn(cm.getFullYear(), cm.getMonth() + off, job.pay);
     if (!(pay > start && pay <= end)) continue;
     const m = (job.months || {})[ym(cm)] || {};
-    const hours = m.hours ?? (+job.hours || 0);
+    const h = monthHours(job, cm, logs, asOf);
     const extra = m.extra ?? 0;
-    const gross = Math.round(wage * hours);
+    const gross = Math.round(wage * h.hours);
     const amount = Math.round(gross * (1 - (+job.dedPct || 0) / 100)) + (+job.transport || 0) + extra;
-    out.push({ cm, pay, hours, extra, gross, taxable: gross + extra, amount, custom: m.hours != null });
+    out.push({ cm, pay, ...h, extra, gross, taxable: gross + extra, amount, custom: h.source !== 'default' });
   }
   return out;
 }

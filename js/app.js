@@ -38,12 +38,15 @@ let confirmKey = null;
 let pendingImport = null;
 let flash = {};
 let cmp = { label: '', amount: 80000, count: 1, feePct: 0 };
+let logDraft = { date: '', hours: '', memo: '' };
+const listOf = name => (name === 'logs' ? S.job.logs : S[name]);
+const hrs = h => `${(Math.round((+h || 0) * 100) / 100).toLocaleString('ja-JP')}h`;
 
 function seed() {
   return {
     v: 1,
     base: { date: M.iso(today()), balance: 0, months: 6, safe: 30000 },
-    job: { wage: 1100, hours: 55, close: 31, pay: 15, offset: 1, dedPct: 0, transport: 0, paidThisYear: 0, wall: 1230000, months: {} },
+    job: { wage: 1100, hours: 55, close: 31, pay: 15, offset: 1, dedPct: 0, transport: 0, paidThisYear: 0, wall: 1230000, months: {}, logs: [] },
     cards: [
       { id: uid(), name: 'メインカード', close: 15, pay: 13, offset: 1 },
       { id: uid(), name: '固定費カード', close: 31, pay: 26, offset: 1 },
@@ -59,6 +62,7 @@ function migrate(d) {
   o.base = { ...s.base, ...(d.base || {}) };
   o.job = { ...s.job, ...(d.job || {}) };
   o.job.months = o.job.months || {};
+  o.job.logs = Array.isArray(o.job.logs) ? o.job.logs : [];
   o.prefs = { ...s.prefs, ...(d.prefs || {}) };
   for (const k of ['cards', 'bills', 'recurring', 'purchases']) o[k] = Array.isArray(d[k]) ? d[k] : s[k];
   return o;
@@ -308,6 +312,61 @@ function viewOverview(sim) {
 }
 
 /* ---------- バイト ---------- */
+const SRC = { actual: '記録（確定）', progress: '予定（記録中）', over: '記録（予定超え）', planned: '予定', default: '標準' };
+
+function logSection(sim) {
+  const logs = S.job.logs;
+  const totals = M.logTotals(S.job);
+  const groups = new Map();
+  for (const l of [...logs].sort((a, b) => (b.date || '').localeCompare(a.date || ''))) {
+    const d = M.parseDate(l.date); if (!d) continue;
+    const k = M.ym(M.closingMonth(d, S.job.close));
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(l);
+  }
+  const t = today();
+  const curK = M.ym(M.closingMonth(t, S.job.close));
+  const cur = M.parseDate(curK + '-01');
+  const curH = M.monthHours(S.job, cur, totals);
+  const w = M.jobWindow(cur, S.job);
+  const keys = [...groups.keys()];
+  const block = (k, i) => {
+    const cm = M.parseDate(k + '-01'), tot = totals.get(k) || { hours: 0, days: 0 };
+    const win = M.jobWindow(cm, S.job);
+    const body = `<div class="tablewrap"><table class="logs">
+      <thead><tr><th>日付</th><th class="r">時間</th><th>メモ</th><th></th></tr></thead>
+      <tbody>${groups.get(k).map(l => `<tr>
+        <td>${cell('logs', l, 'date', `type="date" value="${esc(l.date)}"`)}</td>
+        <td class="n">${cellNum('logs', l, 'hours', 'min="0" step="0.25"')}</td>
+        <td>${cellText('logs', l, 'memo', '')}</td>
+        <td>${delBtn('logs', l, `${l.date} の記録`)}</td></tr>`).join('')}</tbody></table></div>`;
+    const summary = `<span class="lg-m">${fmtYM(cm)}分</span><span class="lg-r">${fmtMD(win.start)}〜${fmtMD(win.end)}</span><span class="n lg-t">${hrs(tot.hours)} / ${tot.days}日</span>`;
+    return `<details class="lg"${i < 2 ? ' open' : ''}><summary>${summary}</summary>${body}</details>`;
+  };
+  return `<section class="block"><div class="head"><h2>勤務時間の記録</h2><span class="sub-h">今月（${fmtMD(w.start)}〜${fmtMD(w.end)}）${hrs(curH.recorded)} / 予定 ${hrs(curH.planned)}</span></div>
+    <form id="log-form" class="logform" autocomplete="off">
+      <label class="field" for="log-date"><span>日付</span><input id="log-date" type="date" data-draft="date" value="${esc(logDraft.date || M.iso(t))}" required></label>
+      <label class="field" for="log-hours"><span>時間<em>h</em></span><input id="log-hours" type="number" inputmode="decimal" min="0.25" step="0.25" data-draft="hours" value="${esc(logDraft.hours)}" placeholder="例：4.5" required></label>
+      <label class="field grow" for="log-memo"><span>メモ（任意）</span><input id="log-memo" type="text" data-draft="memo" value="${esc(logDraft.memo)}"></label>
+      <div class="field end"><button type="submit" class="btn primary">記録する</button></div>
+    </form>
+    <p class="note">働いた日に、その日の労働時間だけを記録します（休憩を除いた時間。30分は 0.5）。休んだ日は何も入れなくて大丈夫です。</p>
+    ${keys.length ? keys.map(block).join('') : '<p class="empty-line">まだ記録がありません。</p>'}
+  </section>`;
+}
+
+function onAddLog(form) {
+  const date = form.querySelector('#log-date').value;
+  const hours = Number(form.querySelector('#log-hours').value);
+  if (!date || !(hours > 0)) return;
+  S.job.logs.push({ id: uid(), date, hours, memo: form.querySelector('#log-memo').value.trim() });
+  // 次の入力に備えて日付を1日進め、時間は前回の値を残す
+  const next = M.addDays(M.parseDate(date), 1);
+  logDraft = { date: M.iso(next), hours: String(hours), memo: '' };
+  scheduleSave(); rerender();
+  document.getElementById('log-hours')?.focus();
+}
+
 function viewJob(sim) {
   const pays = M.jobPayments(S.job, sim.start, sim.end);
   const years = M.yearTotals(S, sim.start, sim.end);
@@ -325,16 +384,19 @@ function viewJob(sim) {
     </div>
     <p class="formula">支給額 ＝ 時給 × 労働時間 × (1 − 控除率) ＋ 交通費・手当 ＋ その月の追加分</p>
   </section>
+${logSection(sim)}
   <section class="block"><div class="head"><h2>月ごとの労働時間</h2></div>
     <div class="tablewrap"><table>
-      <thead><tr><th>勤務月（締め月）</th><th class="r">労働時間</th><th class="r">追加の手当</th><th class="r">支給額</th><th>支給日</th></tr></thead>
+      <thead><tr><th>勤務月（締め月）</th><th class="r">予定</th><th class="r">記録</th><th class="r">計算に使う時間</th><th class="r">追加の手当</th><th class="r">支給額</th><th>支給日</th></tr></thead>
       <tbody>${pays.map(p => { const k = M.ym(p.cm); const m = S.job.months[k] || {}; return `<tr class="${p.custom ? '' : 'auto'}">
         <td>${fmtYM(p.cm)}</td>
-        <td class="n"><input id="jh-${k}" class="cell num" type="number" inputmode="decimal" min="0" step="0.25" data-month="${k}" data-mf="hours" value="${m.hours ?? ''}" placeholder="${esc(S.job.hours)}" aria-label="${fmtYM(p.cm)}の労働時間"></td>
+        <td class="n"><input id="jh-${k}" class="cell num" type="number" inputmode="decimal" min="0" step="0.25" data-month="${k}" data-mf="hours" value="${m.hours ?? ''}" placeholder="${esc(S.job.hours)}" aria-label="${fmtYM(p.cm)}の予定の労働時間"></td>
+        <td class="n">${p.recorded ? `${hrs(p.recorded)}<small>${p.days}日</small>` : '—'}</td>
+        <td class="n strong">${hrs(p.hours)}<small>${SRC[p.source]}</small></td>
         <td class="n"><input id="je-${k}" class="cell num" type="number" inputmode="decimal" data-month="${k}" data-mf="extra" value="${m.extra ?? ''}" placeholder="0" aria-label="${fmtYM(p.cm)}の追加の手当"></td>
         <td class="n strong">${yen(p.amount)}</td><td class="d">${fmt(p.pay)}</td></tr>`; }).join('')}</tbody>
     </table></div>
-    <p class="note">空欄の月は標準の労働時間で計算します（薄い字の行）。シフトが決まったら実際の時間に書き換えてください。</p>
+    <p class="note">締め日を過ぎた月は、記録した時間の合計で計算します（休んだ日は記録しなければ、そのぶん減ります）。締め前の月は、予定と記録のうち多い方を使います。予定が空欄なら標準の労働時間です。</p>
   </section>
   <section class="block"><div class="head"><h2>年間の給与収入</h2></div>
     <div class="fields">
@@ -519,7 +581,7 @@ function applyInput(t) {
   const v = isNum ? (t.value === '' ? 0 : Number(t.value)) : t.value;
   if (t.dataset.bind) { setPath(S, t.dataset.bind, v); return true; }
   if (t.dataset.list) {
-    const it = S[t.dataset.list].find(x => x.id === t.dataset.id);
+    const it = listOf(t.dataset.list).find(x => x.id === t.dataset.id);
     if (!it) return false;
     it[t.dataset.f] = v;
     if (t.dataset.list === 'purchases' && t.dataset.f === 'card') {
@@ -536,6 +598,7 @@ function applyInput(t) {
     return true;
   }
   if (t.dataset.cmp) { cmp[t.dataset.cmp] = v; paintCompare(); }
+  if (t.dataset.draft) logDraft[t.dataset.draft] = t.value;
   return false;
 }
 
@@ -622,6 +685,7 @@ app.addEventListener('submit', e => {
   if (f.id === 'lock-form') onLockSubmit(f);
   else if (f.id === 'pw-form') onChangePassword(f);
   else if (f.id === 'import-form') onImportSubmit(f);
+  else if (f.id === 'log-form') onAddLog(f);
 });
 app.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -644,7 +708,8 @@ app.addEventListener('click', async e => {
   if (act === 'del') {
     const key = `del:${b.dataset.id}`;
     if (b.dataset.list === 'cards' && confirmKey !== key) { arm(key); return rerender(); }
-    S[b.dataset.list] = S[b.dataset.list].filter(x => x.id !== b.dataset.id);
+    const arr = listOf(b.dataset.list), i = arr.findIndex(x => x.id === b.dataset.id);
+    if (i >= 0) arr.splice(i, 1);
     confirmKey = null; scheduleSave(); return rerender();
   }
   if (act === 'adopt') {

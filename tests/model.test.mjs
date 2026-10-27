@@ -61,6 +61,28 @@ const S3 = structuredClone(S); S3.job.months['2026-11'] = { hours: 80, extra: 20
 const p = M.jobPayments(S3.job, d('2026-10-19'), d('2027-01-31'));
 assert.deepEqual(p.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 60000], ['2026-12-15', 82000], ['2027-01-15', 60000]]);
 
+// 勤務時間の記録
+const J = { wage: 1000, hours: 60, close: 31, pay: 15, offset: 1, months: { '2026-11': { hours: 50 } },
+  logs: [{ date: '2026-10-03', hours: 5 }, { date: '2026-10-10', hours: 4.5 }, { date: '2026-10-10', hours: 1 },
+         { date: '2026-11-02', hours: 6 }, { date: '2026-12-01', hours: 70 }] };
+const asOf = d('2026-11-05');
+const L = M.logTotals(J);
+assert.deepEqual(L.get('2026-10'), { hours: 10.5, days: 2 });
+// 10月：締め済み → 記録の合計だけ（休んだ分は減る）
+assert.deepEqual(M.monthHours(J, d('2026-10-01'), L, asOf).hours, 10.5);
+assert.equal(M.monthHours(J, d('2026-10-01'), L, asOf).source, 'actual');
+// 11月：締め前で記録 6h < 予定 50h → 予定
+assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).hours, 50);
+assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).source, 'progress');
+// 12月：締め前で記録 70h > 標準 60h → 記録
+assert.equal(M.monthHours(J, d('2026-12-01'), L, asOf).hours, 70);
+// 1月：記録なし → 標準
+assert.equal(M.monthHours(J, d('2027-01-01'), L, asOf).source, 'default');
+const jp = M.jobPayments(J, d('2026-11-05'), d('2027-02-28'), asOf);
+assert.deepEqual(jp.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 10500], ['2026-12-15', 50000], ['2027-01-15', 70000], ['2027-02-15', 60000]]);
+// 15日締め：10/16 は 11月締めの勤務
+assert.equal(M.ym(M.closingMonth(d('2026-10-16'), 15)), '2026-11');
+
 // 比較：給料日(2/15)の後に引き落とされる固定費カード 2/26 払いが最も余裕がある
 const S4 = structuredClone(S); S4.purchases = S4.purchases.slice(0, 1);
 const res = M.compare(S4, { label: 't', amount: 80000, count: 1 }, d('2026-12-06'), 3);
