@@ -68,19 +68,16 @@ const J = { wage: 1000, hours: 60, close: 31, pay: 15, offset: 1, months: { '202
 const asOf = d('2026-11-05');
 const L = M.logTotals(J);
 assert.deepEqual(L.get('2026-10'), { hours: 10.5, days: 2 });
-// 10月：締め済み → 記録の合計だけ（休んだ分は減る）
-assert.deepEqual(M.monthHours(J, d('2026-10-01'), L, asOf).hours, 10.5);
-assert.equal(M.monthHours(J, d('2026-10-01'), L, asOf).source, 'actual');
-// 11月：締め前で記録 6h < 予定 50h → 少ない方の記録
+// 記録がある月は、締め前でも予定より少なくても多くても記録の合計
+assert.equal(M.monthHours(J, d('2026-10-01'), L, asOf).hours, 10.5);
 assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).hours, 6);
-assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).source, 'progress');
-// 12月：締め前で記録 70h > 標準 60h → 少ない方の標準
-assert.equal(M.monthHours(J, d('2026-12-01'), L, asOf).hours, 60);
-assert.equal(M.monthHours(J, d('2026-12-01'), L, asOf).source, 'capped');
-// 1月：記録なし → 標準
+assert.equal(M.monthHours(J, d('2026-11-01'), L, asOf).source, 'recorded');
+assert.equal(M.monthHours(J, d('2026-12-01'), L, asOf).hours, 70);
+// 記録なし → 標準
 assert.equal(M.monthHours(J, d('2027-01-01'), L, asOf).source, 'default');
+assert.equal(M.monthHours(J, d('2027-01-01'), L, asOf).hours, 60);
 const jp = M.jobPayments(J, d('2026-11-05'), d('2027-02-28'), asOf);
-assert.deepEqual(jp.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 10500], ['2026-12-15', 6000], ['2027-01-15', 60000], ['2027-02-15', 60000]]);
+assert.deepEqual(jp.map(x => [M.iso(x.pay), x.amount]), [['2026-11-15', 10500], ['2026-12-15', 6000], ['2027-01-15', 70000], ['2027-02-15', 60000]]);
 // 15日締め：10/16 は 11月締めの勤務
 assert.equal(M.ym(M.closingMonth(d('2026-10-16'), 15)), '2026-11');
 

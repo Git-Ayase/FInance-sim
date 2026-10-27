@@ -95,16 +95,14 @@ export function logTotals(job) {
 export function jobWindow(cm, job) { return windowForClosing(cm, { close: job.close }); }
 
 // その月の計算に使う労働時間
-//   締め日を過ぎた月で記録がある → 記録の合計（実績）
-//   締め前の月で記録がある      → 予定と記録の少ない方（少なめに見積もる）
-//   記録がない                  → 予定（空欄なら標準）
+//   記録がある → 記録の合計（予定より少なくても多くても）
+//   記録がない → その月の予定（空欄なら標準の労働時間）
 export function monthHours(job, cm, logs = logTotals(job), asOf = todayDate()) {
   const m = (job.months || {})[ym(cm)] || {};
   const planned = m.hours ?? (+job.hours || 0);
   const rec = logs.get(ym(cm));
   const closed = dayIn(cm.getFullYear(), cm.getMonth(), job.close) < asOf;
-  if (rec && closed) return { hours: rec.hours, planned, recorded: rec.hours, days: rec.days, source: 'actual', closed };
-  if (rec) return { hours: Math.min(planned, rec.hours), planned, recorded: rec.hours, days: rec.days, source: rec.hours < planned ? 'progress' : 'capped', closed };
+  if (rec) return { hours: rec.hours, planned, recorded: rec.hours, days: rec.days, source: 'recorded', closed };
   return { hours: planned, planned, recorded: 0, days: 0, source: m.hours != null ? 'planned' : 'default', closed };
 }
 

@@ -312,7 +312,7 @@ function viewOverview(sim) {
 }
 
 /* ---------- バイト ---------- */
-const SRC = { actual: '記録（確定）', progress: '記録（締め前）', capped: '予定（記録が上回る）', planned: '予定', default: '標準' };
+const SRC = { recorded: '記録', planned: '予定', default: '標準' };
 
 function logSection(sim) {
   const logs = S.job.logs;
@@ -396,7 +396,7 @@ ${logSection(sim)}
         <td class="n"><input id="je-${k}" class="cell num" type="number" inputmode="decimal" data-month="${k}" data-mf="extra" value="${m.extra ?? ''}" placeholder="0" aria-label="${fmtYM(p.cm)}の追加の手当"></td>
         <td class="n strong">${yen(p.amount)}</td><td class="d">${fmt(p.pay)}</td></tr>`; }).join('')}</tbody>
     </table></div>
-    <p class="note">締め日を過ぎた月は、記録した時間の合計で計算します（休んだ日は記録しなければ、そのぶん減ります）。締め前の月も、予定と記録のうち少ない方を使います（収入を少なめに見積もります）。予定が空欄なら標準の労働時間です。</p>
+    <p class="note">記録がある月は、記録した時間の合計で計算します（予定より少なくても多くても）。記録がない月は標準の労働時間で計算します。休みが分かっている月など、記録がない月の見込みだけ変えたいときは「予定」に入れてください。</p>
   </section>
   <section class="block"><div class="head"><h2>年間の給与収入</h2></div>
     <div class="fields">
