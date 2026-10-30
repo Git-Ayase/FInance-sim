@@ -265,6 +265,8 @@ code { font-family: var(--mono); font-size: .85em; background: var(--fill); padd
 .legend li { display: flex; align-items: center; gap: 6px; }
 .legend svg { width: 28px; height: 8px; }
 td.sub-n { color: var(--sub); }
+.range { display: flex; align-items: center; gap: 4px; margin-top: 4px; white-space: nowrap; }
+.range input.cell { min-width: 9.5em; }
 optgroup { font-style: normal; color: var(--sub); }
 
 /* ---- 年間 ---- */

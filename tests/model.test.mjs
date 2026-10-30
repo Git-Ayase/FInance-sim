@@ -159,4 +159,20 @@ SC.incomes = [{ name: 'お小遣い', amount: 10000, freq: 'monthly', day: 25, f
 const sc = M.simulate(SC).rows.filter(r => r.kind === 'other');
 assert.deepEqual(sc.map(r => [M.iso(r.date), r.amount]), [['2026-11-25', 10000], ['2026-12-25', 10000], ['2027-01-01', 30000], ['2027-01-25', 10000]]);
 
+// 現金：入金を口座と現金に分ける・現金の支出・ATMでの引き出し
+const SD = structuredClone(S); SD.bills = []; SD.recurring = []; SD.purchases = []; SD.job.wage = 0;
+SD.accounts = [{ id: 'm', name: 'メイン', balance: 50000 }, { id: 'w', name: '財布', type: 'cash', balance: 3000 }];
+SD.incomes = [{ name: '食事代', amount: 5000, cash: 2000, freq: 'once', date: '2026-11-01', account: 'm' }];
+SD.cashOut = [{ memo: '昼ごはん', amount: 800, freq: 'once', date: '2026-11-02' }, { memo: '食費', amount: 3000, freq: 'monthly', day: 20, from: '2026-11', to: '2026-12' }];
+SD.transfers = [{ memo: 'ATM', amount: 10000, freq: 'once', date: '2026-11-03', from: 'm', to: 'w' }];
+const sd = M.simulate(SD);
+const W = sd.byAccount.find(a => a.id === 'w'), Mn = sd.byAccount.find(a => a.id === 'm');
+assert.equal(W.final, 3000 + 2000 - 800 + 10000 - 3000 - 3000);
+assert.equal(Mn.final, 50000 + 5000 - 10000);
+assert.equal(sd.final, 53000 + 7000 - 800 - 6000);           // 移動は合計を変えない
+const nov = sd.monthly.find(m => M.ym(m.month) === '2026-11');
+assert.deepEqual([nov.income, nov.outflow], [7000, 3800]);    // 移動は収入・支出に数えない
+assert.equal(M.cashId(SD), 'w');
+assert.equal(M.cashId({ base: {}, accounts: [{ id: 'm' }] }), null);
+
 console.log('all tests passed');

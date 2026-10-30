@@ -5,6 +5,7 @@ export const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.get
 export const ym = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 export const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 export const lastDay = (y, m) => new Date(y, m + 1, 0).getDate();
+const todayDate = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
 
 export function parseDate(s) {
   if (!s || typeof s !== 'string') return null;
@@ -289,7 +290,10 @@ export function payMethod(v) {
 }
 export const monthlyCost = sub => (sub.cycle === 'yearly' ? (+sub.amount || 0) / 12 : (+sub.amount || 0));
 
-// その他の入金（お小遣いなど）の入金日
+// 財布（現金）の口座。なければ null
+export function cashId(S) { return accountsOf(S).find(a => a.type === 'cash')?.id || null; }
+
+// その他の入金・現金の支出・口座間の移動の日付（freq: 'monthly' | 'once'）
 export function incomeDates(inc, from, to) {
   if (inc.freq === 'once') { const d = parseDate(inc.date); return d && d >= from && d <= to ? [d] : []; }
   const out = [];
@@ -315,9 +319,29 @@ export function simulate(S, extraPurchases = []) {
   for (const p of jobPayments(S.job, start, end))
     if (p.amount) ev.push({ date: p.pay, amount: p.amount, label: `バイト代（${p.cm.getMonth() + 1}月分）`, kind: 'income', acct: jobAcct });
 
+  // 入金は「口座へ」と「現金」に分けられる
+  const cash = cashId(S);
+  const from1 = addDays(start, 1);
   for (const inc of S.incomes || [])
-    for (const d of incomeDates(inc, addDays(start, 1), end))
+    for (const d of incomeDates(inc, from1, end)) {
       if (+inc.amount) ev.push({ date: d, amount: +inc.amount, label: inc.name || 'その他の入金', kind: 'other', acct: acctId(S, inc.account) });
+      if (+inc.cash && cash) ev.push({ date: d, amount: +inc.cash, label: `${inc.name || 'その他の入金'}（現金）`, kind: 'other', acct: cash });
+    }
+
+  // 現金の支出
+  if (cash) for (const c of S.cashOut || [])
+    for (const d of incomeDates(c, from1, end))
+      if (+c.amount) ev.push({ date: d, amount: -c.amount, label: c.memo || '現金の支出', kind: 'cash', acct: cash });
+
+  // 口座・財布のあいだの移動（引き出し・預け入れ）。合計の残高は変わらない
+  for (const t of S.transfers || []) {
+    const a = acctId(S, t.from), b = acctId(S, t.to);
+    if (a === b || !+t.amount) continue;
+    for (const d of incomeDates(t, from1, end)) {
+      ev.push({ date: d, amount: -t.amount, label: t.memo || '移動', kind: 'transfer', acct: a, pair: b });
+      ev.push({ date: d, amount: +t.amount, label: t.memo || '移動', kind: 'transfer', acct: b, pair: a });
+    }
+  }
 
   // 確定した請求。同じカード・同じ月に確定請求があれば、その月の見込みとサブスクは使わない（請求額に含まれるため）
   const billed = new Set();
@@ -389,15 +413,21 @@ export function simulate(S, extraPurchases = []) {
     const m = new Date(start.getFullYear(), start.getMonth() + i, 1);
     const key = ym(m);
     const rs = rows.filter(r => ym(r.date) === key);
-    const income = rs.filter(r => r.amount > 0).reduce((a, r) => a + r.amount, 0);
-    const outflow = -rs.filter(r => r.amount < 0).reduce((a, r) => a + r.amount, 0);
+    const flow = rs.filter(r => r.kind !== 'transfer');
+    const income = flow.filter(r => r.amount > 0).reduce((a, r) => a + r.amount, 0);
+    const outflow = -flow.filter(r => r.amount < 0).reduce((a, r) => a + r.amount, 0);
     const endBalance = rs.length ? rs[rs.length - 1].balance : prev;
     const low = Math.min(prev, ...rs.map(r => r.balance));
     monthly.push({ month: m, income, outflow, low, endBalance });
     prev = endBalance;
   }
 
-  const byAccount = accounts.map(a => ({ ...a, start: +a.balance || 0, final: bal.get(a.id), min: minBy.get(a.id) }));
+  const now = todayDate();
+  const balanceAt = (id, day) => { let v = null; for (const r of rows) { if (r.date > day) break; if (r.acct === id) v = r.acctBalance; } return v; };
+  const byAccount = accounts.map(a => ({
+    ...a, start: +a.balance || 0, final: bal.get(a.id), min: minBy.get(a.id),
+    today: now < start ? null : now > end ? bal.get(a.id) : (balanceAt(a.id, now) ?? (+a.balance || 0)),
+  }));
   return { start, end, rows, min, startTotal, final: total, monthly, byAccount };
 }
 
