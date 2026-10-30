@@ -254,22 +254,78 @@ export function purchaseEvents(p, card) {
   return out;
 }
 
+/* ---------- 口座・サブスク・その他の入金 ---------- */
+
+// 口座の一覧。古いデータ（口座が1つ）は base.balance から作る
+export function accountsOf(S) {
+  if (Array.isArray(S.accounts) && S.accounts.length) return S.accounts;
+  return [{ id: 'main', name: '口座', balance: +S.base?.balance || 0 }];
+}
+// 指定がない・消えた口座は先頭の口座にする
+export function acctId(S, id) {
+  const list = accountsOf(S);
+  return list.some(a => a.id === id) ? id : list[0].id;
+}
+
+// サブスクの課金日の一覧（from〜to の間）
+export function subCharges(sub, from, to) {
+  const out = [];
+  const startM = parseDate(sub.from ? sub.from + '-01' : '');
+  const endM = parseDate(sub.to ? sub.to + '-01' : '');
+  const yearly = sub.cycle === 'yearly';
+  for (let m = new Date(from.getFullYear(), from.getMonth(), 1); m <= to; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) {
+    if (yearly && m.getMonth() + 1 !== (+sub.month || 1)) continue;
+    if (startM && m < startM) continue;
+    if (endM && m > endM) continue;
+    const d = dayIn(m.getFullYear(), m.getMonth(), sub.day || 1);
+    if (d >= from && d <= to) out.push(d);
+  }
+  return out;
+}
+// "card:<id>" / "acct:<id>"
+export function payMethod(v) {
+  const [type, id] = String(v || '').split(':');
+  return type === 'acct' ? { type: 'acct', id } : { type: 'card', id };
+}
+export const monthlyCost = sub => (sub.cycle === 'yearly' ? (+sub.amount || 0) / 12 : (+sub.amount || 0));
+
+// その他の入金（お小遣いなど）の入金日
+export function incomeDates(inc, from, to) {
+  if (inc.freq === 'once') { const d = parseDate(inc.date); return d && d >= from && d <= to ? [d] : []; }
+  const out = [];
+  const startM = parseDate(inc.from ? inc.from + '-01' : '');
+  const endM = parseDate(inc.to ? inc.to + '-01' : '');
+  for (let m = new Date(from.getFullYear(), from.getMonth(), 1); m <= to; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) {
+    if ((startM && m < startM) || (endM && m > endM)) continue;
+    const d = dayIn(m.getFullYear(), m.getMonth(), inc.day || 1);
+    if (d >= from && d <= to) out.push(d);
+  }
+  return out;
+}
+
 export function simulate(S, extraPurchases = []) {
   const { start, end, months } = simRange(S);
   const inRange = d => d > start && d <= end;
   const cards = new Map(S.cards.map(c => [c.id, c]));
+  const accounts = accountsOf(S);
+  const cardAcct = id => acctId(S, cards.get(id)?.account);
   const ev = [];
 
+  const jobAcct = acctId(S, S.job.account);
   for (const p of jobPayments(S.job, start, end))
-    if (p.amount) ev.push({ date: p.pay, amount: p.amount, label: `バイト代（${p.cm.getMonth() + 1}月分）`, kind: 'income' });
+    if (p.amount) ev.push({ date: p.pay, amount: p.amount, label: `バイト代（${p.cm.getMonth() + 1}月分）`, kind: 'income', acct: jobAcct });
 
-  // 確定した請求。同じカード・同じ月に確定請求があれば、その月の見込みは使わない
+  for (const inc of S.incomes || [])
+    for (const d of incomeDates(inc, addDays(start, 1), end))
+      if (+inc.amount) ev.push({ date: d, amount: +inc.amount, label: inc.name || 'その他の入金', kind: 'other', acct: acctId(S, inc.account) });
+
+  // 確定した請求。同じカード・同じ月に確定請求があれば、その月の見込みとサブスクは使わない（請求額に含まれるため）
   const billed = new Set();
   for (const b of S.bills) {
     const d = parseDate(b.date);
     if (!d || !b.amount) continue;
     if (b.card) billed.add(`${b.card}|${ym(d)}`);
-    if (inRange(d)) ev.push({ date: d, amount: -b.amount, label: b.memo || 'カードの請求', card: b.card, kind: 'bill' });
+    if (inRange(d)) ev.push({ date: d, amount: -b.amount, label: b.memo || 'カードの請求', card: b.card, kind: 'bill', acct: cardAcct(b.card) });
   }
 
   for (const r of S.recurring) {
@@ -281,31 +337,54 @@ export function simulate(S, extraPurchases = []) {
       if (t && m > t) break;
       const d = dayIn(m.getFullYear(), m.getMonth(), card.pay);
       if (!inRange(d) || billed.has(`${r.card}|${ym(d)}`)) continue;
-      ev.push({ date: d, amount: -r.amount, label: r.memo || '毎月の見込み', card: r.card, kind: 'recurring' });
+      ev.push({ date: d, amount: -r.amount, label: r.memo || '毎月の見込み', card: r.card, kind: 'recurring', acct: cardAcct(r.card) });
+    }
+  }
+
+  // サブスク：カード払いは課金日から締め日・支払日で引き落とし日を出す。口座払いは課金日に引き落とし
+  const back = new Date(start.getFullYear(), start.getMonth() - 3, 1);
+  for (const sub of S.subs || []) {
+    if (!+sub.amount) continue;
+    const pm = payMethod(sub.pay);
+    for (const c of subCharges(sub, back, end)) {
+      if (pm.type === 'acct') {
+        if (inRange(c)) ev.push({ date: c, amount: -sub.amount, label: sub.name || 'サブスク', kind: 'sub', acct: acctId(S, pm.id) });
+        continue;
+      }
+      const card = cards.get(pm.id);
+      if (!card) continue;
+      const d = payDateForPurchase(c, card);
+      if (!inRange(d) || billed.has(`${card.id}|${ym(d)}`)) continue;
+      ev.push({ date: d, amount: -sub.amount, label: `${sub.name || 'サブスク'}（${c.getMonth() + 1}/${c.getDate()}課金）`, card: card.id, kind: 'sub', acct: cardAcct(card.id) });
     }
   }
 
   for (const l of S.loans || [])
     for (const x of loanSchedule(l, end))
-      if (inRange(x.date) && x.amount) ev.push({ date: x.date, amount: -x.amount, label: `${l.name || 'ローン'}${(l.count | 0) ? `（${x.n}/${l.count}回）` : ''}`, kind: 'loan' });
+      if (inRange(x.date) && x.amount) ev.push({ date: x.date, amount: -x.amount, label: `${l.name || 'ローン'}${(l.count | 0) ? `（${x.n}/${l.count}回）` : ''}`, kind: 'loan', acct: acctId(S, l.account) });
 
   for (const p of [...S.purchases, ...extraPurchases])
-    for (const e of purchaseEvents(p, cards.get(p.card))) if (inRange(e.date)) ev.push(e);
+    for (const e of purchaseEvents(p, cards.get(p.card))) if (inRange(e.date)) ev.push({ ...e, acct: cardAcct(p.card) });
 
   // 同じ日は出金を先に（低めに見積もる）
   ev.sort((a, b) => a.date - b.date || (a.amount > 0) - (b.amount > 0));
 
-  const startBal = +S.base.balance || 0;
-  let bal = startBal;
-  let min = { balance: bal, date: start, index: -1 };
+  // 口座ごとの残高と、その最低
+  const bal = new Map(accounts.map(a => [a.id, +a.balance || 0]));
+  const startTotal = [...bal.values()].reduce((x, y) => x + y, 0);
+  const minBy = new Map(accounts.map(a => [a.id, { acct: a.id, balance: +a.balance || 0, date: start, index: -1 }]));
+  let total = startTotal;
   const rows = ev.map((e, i) => {
-    bal += e.amount;
-    if (bal < min.balance) min = { balance: bal, date: e.date, index: i };
-    return { ...e, balance: bal };
+    const b = bal.get(e.acct) + e.amount;
+    bal.set(e.acct, b); total += e.amount;
+    if (b < minBy.get(e.acct).balance) minBy.set(e.acct, { acct: e.acct, balance: b, date: e.date, index: i });
+    return { ...e, acctBalance: b, balance: total };
   });
+  // 一番危ない口座の最低残高
+  const min = [...minBy.values()].reduce((a, b) => (b.balance < a.balance ? b : a));
 
   const monthly = [];
-  let prev = startBal;
+  let prev = startTotal;
   for (let i = 0; i < months; i++) {
     const m = new Date(start.getFullYear(), start.getMonth() + i, 1);
     const key = ym(m);
@@ -318,7 +397,8 @@ export function simulate(S, extraPurchases = []) {
     prev = endBalance;
   }
 
-  return { start, end, rows, min, final: bal, monthly };
+  const byAccount = accounts.map(a => ({ ...a, start: +a.balance || 0, final: bal.get(a.id), min: minBy.get(a.id) }));
+  return { start, end, rows, min, startTotal, final: total, monthly, byAccount };
 }
 
 // 大きい買い物：カード × 引き落とし日 の組み合わせごとの最低残高

@@ -16,7 +16,7 @@ const fmtMD = d => `${d.getMonth() + 1}/${d.getDate()}`;
 const fmtYM = d => `${d.getFullYear()}年${d.getMonth() + 1}月`;
 const today = () => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); };
 const uid = () => crypto.randomUUID().slice(0, 8);
-const KIND = { income: '収入', bill: '確定した請求', recurring: '毎月の見込み', purchase: '大きい買い物', loan: 'ローン' };
+const KIND = { income: '収入', bill: '確定した請求', recurring: '毎月の見込み', purchase: '大きい買い物', loan: 'ローン', sub: 'サブスク', other: 'その他の入金' };
 const OFFSETS = [[0, '当月'], [1, '翌月'], [2, '翌々月']];
 const COUNTS = [1, 2, 3, 5, 6, 10, 12, 24];
 
@@ -63,7 +63,8 @@ function seed() {
       { id: uid(), name: '固定費カード', close: 31, pay: 26, offset: 1 },
       { id: uid(), name: 'その他カード', close: 5, pay: 4, offset: 1 },
     ],
-    bills: [], recurring: [], purchases: [], loans: [],
+    accounts: [{ id: uid(), name: 'メイン口座', balance: 0 }],
+    bills: [], recurring: [], purchases: [], loans: [], subs: [], incomes: [],
     prefs: { lockMin: 5 },
   };
 }
@@ -77,7 +78,9 @@ function migrate(d) {
   o.job.rules = { ...M.DEFAULT_RULES, ...(o.job.rules || {}) };
   delete o.job.logs;
   o.prefs = { ...s.prefs, ...(d.prefs || {}) };
-  for (const k of ['cards', 'bills', 'recurring', 'purchases', 'loans']) o[k] = Array.isArray(d[k]) ? d[k] : s[k];
+  for (const k of ['cards', 'bills', 'recurring', 'purchases', 'loans', 'subs', 'incomes']) o[k] = Array.isArray(d[k]) ? d[k] : s[k];
+  // 口座が1つだった頃のデータは、基準日の残高をメイン口座にする
+  o.accounts = Array.isArray(d.accounts) && d.accounts.length ? d.accounts : [{ id: 'main', name: 'メイン口座', balance: +o.base.balance || 0 }];
   return o;
 }
 
@@ -332,7 +335,7 @@ async function onJoin(form) {
 }
 
 /* ---------- 画面の骨組み ---------- */
-const TABS = [['overview', '概要'], ['job', 'バイト'], ['cards', 'カード・請求'], ['buy', '大きい買い物'], ['settings', '設定']];
+const TABS = [['overview', '概要'], ['money', '口座・入金'], ['job', 'バイト'], ['cards', 'カード・請求'], ['buy', '大きい買い物'], ['settings', '設定']];
 
 function renderApp() {
   app.innerHTML = `
@@ -357,7 +360,7 @@ function renderApp() {
 function renderPage() {
   const sim = M.simulate(S);
   paintStatus(sim);
-  const views = { overview: viewOverview, job: viewJob, cards: viewCards, buy: viewBuy, settings: viewSettings };
+  const views = { overview: viewOverview, money: viewMoney, job: viewJob, cards: viewCards, buy: viewBuy, settings: viewSettings };
   document.getElementById('page').innerHTML = views[tab](sim);
 }
 
@@ -384,9 +387,9 @@ const chip = j => `<span class="chip ${j[0]}">${j[1]}</span>`;
 function paintStatus(sim) {
   const el = document.getElementById('status'); if (!el) return;
   el.innerHTML = `
-    <div class="stat"><span class="k">基準日の残高</span><span class="v">${yen(S.base.balance)}<small>円</small></span><span class="s">${fmt(sim.start)}</span></div>
-    <div class="stat"><span class="k">最低残高</span><span class="v">${yen(sim.min.balance)}<small>円</small></span><span class="s">${fmt(sim.min.date)} ${chip(judge(sim.min))}</span></div>
-    <div class="stat"><span class="k">期間末の残高</span><span class="v">${yen(sim.final)}<small>円</small></span><span class="s">${fmt(sim.end)}</span></div>`;
+    <div class="stat"><span class="k">基準日の残高${multi() ? `（${S.accounts.length}口座の合計）` : ''}</span><span class="v">${yen(sim.startTotal)}<small>円</small></span><span class="s">${fmt(sim.start)}</span></div>
+    <div class="stat"><span class="k">最低残高${multi() ? '（一番少なくなる口座）' : ''}</span><span class="v">${yen(sim.min.balance)}<small>円</small></span><span class="s">${esc(minLabel(sim.min))} ${chip(judge(sim.min))}</span></div>
+    <div class="stat"><span class="k">期間末の残高${multi() ? '（合計）' : ''}</span><span class="v">${yen(sim.final)}<small>円</small></span><span class="s">${fmt(sim.end)}</span></div>`;
 }
 
 /* ---------- 入力部品 ---------- */
@@ -405,6 +408,10 @@ function fieldSelect(path, label, opts, o = {}) {
     ${o.note ? `<small>${o.note}</small>` : ''}</label>`;
 }
 const cardName = id => S.cards.find(c => c.id === id)?.name || '';
+const multi = () => S.accounts.length > 1;
+const acctName = id => S.accounts.find(a => a.id === M.acctId(S, id))?.name || '';
+const acctSelect = (id, list, it, f = 'account', label = '口座') => `<select id="${id}" class="cell" data-list="${list}" data-id="${it.id}" data-f="${f}" aria-label="${label}">${S.accounts.map(a => `<option value="${a.id}"${a.id === M.acctId(S, it[f]) ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`;
+const minLabel = min => (multi() ? `${acctName(min.acct)}・` : '') + fmt(min.date);
 const cardOptions = sel => (sel && !S.cards.some(c => c.id === sel) ? '<option value="">（カード未選択）</option>' : '') +
   S.cards.map(c => `<option value="${c.id}"${c.id === sel ? ' selected' : ''}>${esc(c.name)}</option>`).join('');
 const cell = (list, it, f, attrs = '') => `<input id="${list}-${it.id}-${f}" class="cell" data-list="${list}" data-id="${it.id}" data-f="${f}" ${attrs}>`;
@@ -421,19 +428,23 @@ function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))
 function chart(sim) {
   const avail = (document.getElementById('page')?.clientWidth || 800) - 34;
   const W = Math.round(Math.max(340, Math.min(1080, avail))), H = W < 560 ? 200 : 240, L = 46, R = 10, T = 14, B = 28;
-  const pts = [{ date: sim.start, balance: +S.base.balance || 0 }, ...sim.rows];
+  const pts = [{ date: sim.start, balance: sim.startTotal }, ...sim.rows];
+  const acctPts = multi() ? sim.byAccount.map(a => [{ date: sim.start, balance: a.start }, ...sim.rows.filter(r => r.acct === a.id).map(r => ({ date: r.date, balance: r.acctBalance }))]) : [];
   const t0 = sim.start.getTime(), t1 = M.addDays(sim.end, 1).getTime(), span = t1 - t0;
   const safe = +S.base.safe || 0;
-  const vals = pts.map(p => p.balance);
+  const vals = [...pts, ...acctPts.flat()].map(p => p.balance);
   let lo = Math.min(0, ...vals), hi = Math.max(safe, ...vals);
   if (hi === lo) hi = lo + 10000;
   const step = niceStep((hi - lo) / 4);
   lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
   const x = t => L + (t - t0) / span * (W - L - R);
   const y = v => T + (hi - v) / (hi - lo) * (H - T - B);
-  let d = `M${x(t0).toFixed(1)},${y(pts[0].balance).toFixed(1)}`;
-  for (const p of pts.slice(1)) d += ` H${x(p.date.getTime()).toFixed(1)} V${y(p.balance).toFixed(1)}`;
-  d += ` H${x(t1).toFixed(1)}`;
+  const stepPath = ps => {
+    let d = `M${x(t0).toFixed(1)},${y(ps[0].balance).toFixed(1)}`;
+    for (const p of ps.slice(1)) d += ` H${x(p.date.getTime()).toFixed(1)} V${y(p.balance).toFixed(1)}`;
+    return d + ` H${x(t1).toFixed(1)}`;
+  };
+  const d = stepPath(pts);
   const area = `${d} V${y(lo).toFixed(1)} H${x(t0).toFixed(1)} Z`;
   const ticks = []; for (let v = lo; v <= hi + 1; v += step) ticks.push(v);
   const months = [];
@@ -448,26 +459,39 @@ function chart(sim) {
     <path class="ch-area" d="${area}"/>
     ${safe > lo && safe < hi ? `<line class="ch-safe" x1="${L}" x2="${W - R}" y1="${y(safe)}" y2="${y(safe)}"/><text class="ch-ax" x="${W - R}" y="${y(safe) - 5}" text-anchor="end">安全ライン ${man(safe)}</text>` : ''}
     ${lo < 0 ? `<line class="ch-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>` : ''}
-    <path class="ch-line" d="${d}"/>
+    <path class="ch-line${multi() ? ' total' : ''}" d="${d}"/>
+    ${acctPts.map((ps, i) => `<path class="ch-acct a${i % 4}" d="${stepPath(ps)}"/>`).join('')}
     <rect class="ch-min" x="${mx - 4.5}" y="${my - 4.5}" width="9" height="9"/>
-    <text class="ch-lbl" x="${right ? mx - 10 : mx + 10}" y="${ly}" text-anchor="${right ? 'end' : 'start'}">最低 ${yen(sim.min.balance)}円（${fmtMD(sim.min.date)}）</text>
-  </svg></div>`;
+    <text class="ch-lbl" x="${right ? mx - 10 : mx + 10}" y="${ly}" text-anchor="${right ? 'end' : 'start'}">最低 ${yen(sim.min.balance)}円（${multi() ? esc(acctName(sim.min.acct)) + ' ' : ''}${fmtMD(sim.min.date)}）</text>
+  </svg>
+  ${multi() ? `<ul class="legend"><li><svg viewBox="0 0 28 8" aria-hidden="true"><line class="ch-line total" x1="0" x2="28" y1="4" y2="4"/></svg>合計</li>${sim.byAccount.map((a, i) => `<li><svg viewBox="0 0 28 8" aria-hidden="true"><line class="ch-acct a${i % 4}" x1="0" x2="28" y1="4" y2="4"/></svg>${esc(a.name)}</li>`).join('')}</ul>` : ''}
+  </div>`;
 }
 
 function viewOverview(sim) {
-  const hint = (!S.base.balance && !S.bills.length)
-    ? `<div class="hint"><strong>はじめに</strong>「設定」で今の口座残高を、「カード・請求」で確定している請求を入力してください。バイトの時給と労働時間は「バイト」で変えられます。</div>` : '';
+  const hint = (!sim.startTotal && !S.bills.length)
+    ? `<div class="hint"><strong>はじめに</strong>「口座・入金」で今の口座残高を、「カード・請求」で確定している請求を入力してください。バイトの時給と労働時間は「バイト」で変えられます。</div>` : '';
   const ledger = [
-    `<tr class="base"><td class="d">${fmt(sim.start)}</td><td>基準日の残高</td><td></td><td></td><td class="n">${yen(S.base.balance)}</td></tr>`,
+    `<tr class="base"><td class="d">${fmt(sim.start)}</td><td>基準日の残高</td>${multi() ? '<td></td>' : ''}<td></td><td></td><td class="n">${yen(sim.startTotal)}</td>${multi() ? '<td></td>' : ''}</tr>`,
     ...sim.rows.map((r, i) => `<tr class="${i === sim.min.index ? 'min' : ''}">
       <td class="d">${fmt(r.date)}</td>
       <td>${esc(r.label)}<small>${esc([cardName(r.card), KIND[r.kind]].filter(Boolean).join(' · '))}</small></td>
+      ${multi() ? `<td>${esc(acctName(r.acct))}</td>` : ''}
       <td class="n">${r.amount < 0 ? yen(-r.amount) : ''}</td>
       <td class="n">${r.amount > 0 ? yen(r.amount) : ''}</td>
-      <td class="n bal${r.balance < 0 ? ' neg' : ''}">${yen(r.balance)}</td></tr>`),
+      ${multi()
+        ? `<td class="n bal${r.acctBalance < 0 ? ' neg' : ''}">${yen(r.acctBalance)}</td><td class="n sub-n">${yen(r.balance)}</td>`
+        : `<td class="n bal${r.balance < 0 ? ' neg' : ''}">${yen(r.balance)}</td>`}</tr>`),
   ].join('');
   return `${hint}
   <section class="block"><div class="head"><h2>残高の推移</h2></div>${chart(sim)}</section>
+  ${multi() ? `<section class="block"><div class="head"><h2>口座ごと</h2></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>口座</th><th class="r">基準日</th><th class="r">最低残高</th><th>最低になる日</th><th class="r">期間末</th><th>判定</th></tr></thead>
+      <tbody>${sim.byAccount.map(a => `<tr${a.id === sim.min.acct ? ' class="min"' : ''}><td>${esc(a.name)}</td><td class="n">${yen(a.start)}</td><td class="n${a.min.balance < 0 ? ' neg' : ''}">${yen(a.min.balance)}</td><td class="d">${fmt(a.min.date)}</td><td class="n strong">${yen(a.final)}</td><td>${chip(judge(a.min))}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="note">口座のあいだの移動（振替）は計算に入っていません。足りなくなる口座があれば、前もって移しておく目安にしてください。</p>
+  </section>` : ''}
   <section class="block"><div class="head"><h2>月ごとの集計</h2></div>
     <div class="tablewrap"><table>
       <thead><tr><th>月</th><th class="r">収入</th><th class="r">支出</th><th class="r">月内の最低</th><th class="r">月末の残高</th></tr></thead>
@@ -475,7 +499,7 @@ function viewOverview(sim) {
     </table></div></section>
   <section class="block"><div class="head"><h2>入出金の明細</h2><button type="button" class="btn" data-act="csv">CSVで書き出す</button></div>
     <div class="tablewrap"><table class="ledger">
-      <thead><tr><th>日付</th><th>内容</th><th class="r">出金</th><th class="r">入金</th><th class="r">残高</th></tr></thead>
+      <thead><tr><th>日付</th><th>内容</th>${multi() ? '<th>口座</th>' : ''}<th class="r">出金</th><th class="r">入金</th>${multi() ? '<th class="r">口座の残高</th><th class="r">合計</th>' : '<th class="r">残高</th>'}</tr></thead>
       <tbody>${ledger}</tbody></table></div>
     <p class="note">網掛けの行が最低残高です。同じ日に入金と出金がある場合は、出金を先に計算します。土日祝で引き落とし日がずれる分は反映していません。</p>
   </section>`;
@@ -588,6 +612,7 @@ function viewJob(sim) {
       ${fieldNum('job.close', '締め日', { min: 1, max: 31, note: '31 = 月末締め' })}
       ${fieldNum('job.pay', '給料日', { min: 1, max: 31 })}
       ${fieldSelect('job.offset', '支給月', OFFSETS, { note: '締めた月から数えて' })}
+      <label class="field" for="f-job-account"><span>振込先の口座</span><select id="f-job-account" data-bind="job.account">${S.accounts.map(a => `<option value="${a.id}"${a.id === M.acctId(S, S.job.account) ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
       ${fieldNum('job.dedPct', '控除率', { unit: '%', min: 0, max: 100, step: 0.1, note: '所得税などの天引き' })}
       ${fieldNum('job.transport', '交通費・定額手当（月）', { unit: '円', min: 0 })}
       ${ruleField('breakOver', '休憩が入るシフトの長さ', '時間', 60, 'これを超えると休憩を引く')}
@@ -633,12 +658,13 @@ function viewCards(sim) {
   return `
   <section class="block"><div class="head"><h2>カード</h2><button type="button" class="btn" data-act="add" data-list="cards">＋ カードを追加</button></div>
     <div class="tablewrap"><table>
-      <thead><tr><th>名前</th><th class="r">締め日</th><th class="r">支払日</th><th>支払月</th><th>次の引き落とし</th><th></th></tr></thead>
+      <thead><tr><th>名前</th><th class="r">締め日</th><th class="r">支払日</th><th>支払月</th><th>引き落とし口座</th><th>次の引き落とし</th><th></th></tr></thead>
       <tbody>${S.cards.map(c => `<tr>
         <td>${cellText('cards', c, 'name')}</td>
         <td class="n">${cellNum('cards', c, 'close', 'min="1" max="31"')}</td>
         <td class="n">${cellNum('cards', c, 'pay', 'min="1" max="31"')}</td>
         <td><select id="cards-${c.id}-offset" class="cell" data-list="cards" data-id="${c.id}" data-f="offset" data-type="num">${OFFSETS.map(([k, l]) => `<option value="${k}"${k == (c.offset ?? 1) ? ' selected' : ''}>${l}</option>`).join('')}</select></td>
+        <td>${acctSelect(`cards-${c.id}-account`, 'cards', c, 'account', `${c.name}の引き落とし口座`)}</td>
         <td class="d">${fmt(M.nextPayDate(c, base))}</td>
         <td>${delBtn('cards', c, c.name)}</td></tr>`).join('')}</tbody>
     </table></div>
@@ -671,7 +697,47 @@ function viewCards(sim) {
     </table></div>
     <p class="note">開始月・終了月は引き落としの月です。終了月が空欄なら計算期間の最後まで続きます。</p>
   </section>
+  ${subSection(base)}
   ${loanSection(base)}`;
+}
+
+function payOptionsHTML(v) {
+  const pm = M.payMethod(v);
+  const cur = pm.type === 'acct' ? `acct:${M.acctId(S, pm.id)}` : `card:${pm.id}`;
+  const cardsOk = S.cards.some(c => c.id === pm.id);
+  return `${pm.type === 'card' && !cardsOk ? '<option value="">（未選択）</option>' : ''}
+    <optgroup label="カード">${S.cards.map(c => `<option value="card:${c.id}"${cur === `card:${c.id}` ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</optgroup>
+    <optgroup label="口座から直接">${S.accounts.map(a => `<option value="acct:${a.id}"${cur === `acct:${a.id}` ? ' selected' : ''}>${esc(a.name)}</option>`).join('')}</optgroup>`;
+}
+function subSection(base) {
+  const t = base;
+  const rows = S.subs.map(u => {
+    const yearly = u.cycle === 'yearly';
+    const next = M.subCharges(u, M.addDays(t, 1), new Date(t.getFullYear() + 2, t.getMonth(), 1))[0];
+    const pm = M.payMethod(u.pay);
+    const card = pm.type === 'card' ? S.cards.find(c => c.id === pm.id) : null;
+    const payOn = next ? (card ? M.payDateForPurchase(next, card) : next) : null;
+    return `<tr${u.to && M.parseDate(u.to + '-01') < new Date(t.getFullYear(), t.getMonth(), 1) ? ' class="past"' : ''}>
+      <td>${cellText('subs', u, 'name', '例：Spotify')}</td>
+      <td class="n">${cellNum('subs', u, 'amount', 'min="0"')}</td>
+      <td><select id="subs-${u.id}-cycle" class="cell" data-list="subs" data-id="${u.id}" data-f="cycle" aria-label="周期"><option value="monthly"${!yearly ? ' selected' : ''}>毎月</option><option value="yearly"${yearly ? ' selected' : ''}>毎年</option></select></td>
+      <td class="bm">${yearly ? `<select id="subs-${u.id}-month" class="cell" data-list="subs" data-id="${u.id}" data-f="month" data-type="num" aria-label="課金月">${MONTHS.slice(1).map(([k, l]) => `<option value="${k}"${k == (u.month || 1) ? ' selected' : ''}>${l}</option>`).join('')}</select>` : ''}${cellNum('subs', u, 'day', 'min="1" max="31" aria-label="課金日"')}<small>日</small></td>
+      <td><select id="subs-${u.id}-pay" class="cell" data-list="subs" data-id="${u.id}" data-f="pay" aria-label="支払い方法">${payOptionsHTML(u.pay)}</select></td>
+      <td>${cell('subs', u, 'from', `type="month" value="${esc(u.from)}" aria-label="開始月"`)}</td>
+      <td>${cell('subs', u, 'to', `type="month" value="${esc(u.to)}" aria-label="解約月"`)}</td>
+      <td class="d">${next ? fmt(next) : '—'}${payOn && card ? `<small>引き落とし ${fmt(payOn)}</small>` : ''}</td>
+      <td class="n">${yen(M.monthlyCost(u))}</td>
+      <td>${delBtn('subs', u, u.name || 'サブスク')}</td></tr>`;
+  }).join('');
+  const active = S.subs.filter(u => !u.to || M.parseDate(u.to + '-01') >= new Date(t.getFullYear(), t.getMonth(), 1));
+  const perMonth = active.reduce((a, u) => a + M.monthlyCost(u), 0);
+  return `<section class="block"><div class="head"><h2>サブスク</h2>${S.subs.length ? `<span class="sub-h">${active.length}件・月あたり ${yen(perMonth)}円・年 ${yen(perMonth * 12)}円</span>` : ''}<button type="button" class="btn" data-act="add" data-list="subs">＋ サブスクを追加</button></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>名前</th><th class="r">金額</th><th>周期</th><th>課金日</th><th>支払い方法</th><th>開始月</th><th>解約月</th><th>次の課金</th><th class="r">月あたり</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="10" class="empty">動画・音楽・クラウドなどの定期課金を入れると、カードの締め日に合わせて引き落としに加わります。</td></tr>'}</tbody>
+    </table></div>
+    <p class="note">カード払いは課金日からカードの締め日・支払日で引き落とし日を出します。そのカードの確定した請求がある月は、請求額に含まれているものとして重ねません。解約月を入れると、その月の課金が最後になります。</p>
+  </section>`;
 }
 
 const MONTHS = [[0, 'なし'], ...Array.from({ length: 12 }, (_, i) => [i + 1, `${i + 1}月`])];
@@ -690,6 +756,7 @@ function loanSection(base) {
       <td class="n">${cellNum('loans', l, 'count', 'min="0"')}</td>
       <td class="n">${cellNum('loans', l, 'bonusAmount', 'min="0"')}</td>
       <td class="bm">${sel(l, 'bonusM1')}${sel(l, 'bonusM2')}</td>
+      <td>${acctSelect(`loans-${l.id}-account`, 'loans', l, 'account', '引き落とし口座')}</td>
       <td class="n">${remain}</td>
       <td class="d">${st.next ? fmt(st.next.date) : '—'}</td>
       <td class="d">${st.last ? fmt(st.last) : '—'}</td>
@@ -698,8 +765,8 @@ function loanSection(base) {
   const sum = S.loans.reduce((a, l) => { const st = M.loanStatus(l, base); return { m: a.m + (st.remainCount ? +l.amount || 0 : 0), r: a.r + ((l.count | 0) ? st.remainTotal : 0) }; }, { m: 0, r: 0 });
   return `<section class="block"><div class="head"><h2>ローン</h2>${S.loans.length ? `<span class="sub-h">毎月 ${yen(sum.m)}円・残り ${yen(sum.r)}円</span>` : ''}<button type="button" class="btn" data-act="add" data-list="loans">＋ ローンを追加</button></div>
     <div class="tablewrap"><table>
-      <thead><tr><th>名前</th><th class="r">毎月の返済額</th><th class="r">引き落とし日</th><th>初回の月</th><th class="r">返済回数</th><th class="r">ボーナス月の加算</th><th>ボーナス月</th><th class="r">残り</th><th>次回</th><th>完済予定</th><th></th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="11" class="empty">口座から引き落とされるローンや分割の返済を入れると、毎月の引き落としに加わります。</td></tr>'}</tbody>
+      <thead><tr><th>名前</th><th class="r">毎月の返済額</th><th class="r">引き落とし日</th><th>初回の月</th><th class="r">返済回数</th><th class="r">ボーナス月の加算</th><th>ボーナス月</th><th>引き落とし口座</th><th class="r">残り</th><th>次回</th><th>完済予定</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="12" class="empty">口座から引き落とされるローンや分割の返済を入れると、毎月の引き落としに加わります。</td></tr>'}</tbody>
     </table></div>
     <p class="note">口座から毎月引き落とされる返済です（カード払いの分割は「大きい買い物」で入れます）。返済回数は初回からの合計で、0 にすると計算期間の最後まで続きます。残りは基準日より後の回数と金額です。</p>
   </section>`;
@@ -720,7 +787,7 @@ function compareHTML() {
       <td>${esc(r.card.name)}</td>
       <td class="d">${fmt(r.payDate)}${spec.count > 1 ? `<small>から${spec.count}回</small>` : ''}</td>
       <td class="d">${fmtMD(r.start)} 〜 ${fmtMD(r.end)}</td>
-      <td class="n">${r.outOfRange ? '—' : `${yen(r.min.balance)}<small>${fmt(r.min.date)}</small>`}</td>
+      <td class="n">${r.outOfRange ? '—' : `${yen(r.min.balance)}<small>${esc(minLabel(r.min))}</small>`}</td>
       <td>${r.outOfRange ? '<span class="chip">計算期間外</span>' : r === best ? '<span class="chip ok solid">最も余裕あり</span>' : chip(judge(r.min))}</td>
       <td><button type="button" class="btn small" data-act="adopt" data-card="${r.card.id}" data-pay="${M.iso(r.payDate)}">予定に追加</button></td></tr>`).join('')}</tbody>
   </table></div>
@@ -833,13 +900,59 @@ async function onSyncPassword(form) {
   } catch { sync.msg = 'パスワードが違います。同期先のパスワードを入力してください。'; paintSyncBar(); }
 }
 
+function viewMoney(sim) {
+  const accts = S.accounts.map(a => {
+    const b = sim.byAccount.find(x => x.id === a.id);
+    const used = [S.cards.some(c => M.acctId(S, c.account) === a.id) && 'カード', M.acctId(S, S.job.account) === a.id && 'バイト',
+      S.incomes.some(i => M.acctId(S, i.account) === a.id) && '入金', S.loans.some(l => M.acctId(S, l.account) === a.id) && 'ローン',
+      S.subs.some(u => M.payMethod(u.pay).type === 'acct' && M.acctId(S, M.payMethod(u.pay).id) === a.id) && 'サブスク'].filter(Boolean).join('・');
+    return `<tr>
+      <td>${cellText('accounts', a, 'name', '例：ゆうちょ')}</td>
+      <td class="n">${cellNum('accounts', a, 'balance')}</td>
+      <td class="d">${esc(used) || '—'}</td>
+      <td class="n${b && b.min.balance < 0 ? ' neg' : ''}">${b ? yen(b.min.balance) : ''}<small>${b ? fmt(b.min.date) : ''}</small></td>
+      <td class="n strong">${b ? yen(b.final) : ''}</td>
+      <td>${S.accounts.length > 1 ? delBtn('accounts', a, a.name) : ''}</td></tr>`;
+  }).join('');
+  const incs = S.incomes.map(i => {
+    const once = i.freq === 'once';
+    return `<tr>
+      <td>${cellText('incomes', i, 'name', '例：お小遣い')}</td>
+      <td class="n">${cellNum('incomes', i, 'amount', 'min="0"')}</td>
+      <td><select id="incomes-${i.id}-freq" class="cell" data-list="incomes" data-id="${i.id}" data-f="freq" aria-label="頻度"><option value="monthly"${!once ? ' selected' : ''}>毎月</option><option value="once"${once ? ' selected' : ''}>1回だけ</option></select></td>
+      <td>${once ? cell('incomes', i, 'date', `type="date" value="${esc(i.date)}" aria-label="入金日"`) : `<span class="bm">${cellNum('incomes', i, 'day', 'min="1" max="31" aria-label="毎月の入金日"')}<small>日</small></span>`}</td>
+      <td>${once ? '' : cell('incomes', i, 'from', `type="month" value="${esc(i.from)}" aria-label="開始月"`)}</td>
+      <td>${once ? '' : cell('incomes', i, 'to', `type="month" value="${esc(i.to)}" aria-label="終了月"`)}</td>
+      <td>${acctSelect(`incomes-${i.id}-account`, 'incomes', i, 'account', '入金先の口座')}</td>
+      <td>${delBtn('incomes', i, i.name || '入金')}</td></tr>`;
+  }).join('');
+  const monthlyIn = S.incomes.filter(i => i.freq !== 'once').reduce((a, i) => a + (+i.amount || 0), 0);
+  return `
+  <section class="block"><div class="head"><h2>銀行口座</h2><span class="sub-h">合計 ${yen(sim.startTotal)}円</span><button type="button" class="btn" data-act="add" data-list="accounts">＋ 口座を追加</button></div>
+    <div class="fields">
+      <label class="field" for="f-base-date"><span>基準日</span><input id="f-base-date" type="date" data-bind="base.date" value="${esc(S.base.date)}"><small>この日の引き落とし後の残高を各口座に入れます</small></label>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>口座名</th><th class="r">基準日の残高</th><th>使っているもの</th><th class="r">最低残高</th><th class="r">期間末</th><th></th></tr></thead>
+      <tbody>${accts}</tbody>
+    </table></div>
+    <p class="note">カードの引き落とし口座は「カード・請求」、バイト代の振込先は「バイト」で選びます。指定していないものは一番上の口座になります。口座の削除は × を2回押します。</p>
+  </section>
+  <section class="block"><div class="head"><h2>バイト以外の入金</h2>${S.incomes.length ? `<span class="sub-h">毎月 ${yen(monthlyIn)}円</span>` : ''}<button type="button" class="btn" data-act="add" data-list="incomes">＋ 入金を追加</button></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>名前</th><th class="r">金額</th><th>頻度</th><th>入金日</th><th>開始月</th><th>終了月</th><th>入金先</th><th></th></tr></thead>
+      <tbody>${incs || '<tr><td colspan="8" class="empty">お小遣い・仕送り・お年玉など、バイト以外のお金が入る予定を入れます。</td></tr>'}</tbody>
+    </table></div>
+    <p class="note">「毎月」は開始月から終了月まで毎月の入金日に入ります（終了月が空欄なら計算期間の最後まで）。「1回だけ」は日付を指定します。</p>
+  </section>`;
+}
+
 function viewSettings() {
   const f = k => flash[k] ? `<p class="msg" role="status">${esc(flash[k])}</p>` : '';
   return `
-  <section class="block"><div class="head"><h2>口座と計算期間</h2></div>
+  <section class="block"><div class="head"><h2>計算期間</h2></div>
+    <p class="note">基準日と口座の残高は「口座・入金」で入れます。</p>
     <div class="fields">
-      <label class="field" for="f-base-date"><span>基準日</span><input id="f-base-date" type="date" data-bind="base.date" value="${esc(S.base.date)}"><small>この日の引き落とし後の残高を入れます</small></label>
-      ${fieldNum('base.balance', '基準日の口座残高', { unit: '円' })}
       ${fieldNum('base.months', '計算する月数', { min: 1, max: 36, note: '基準日の月から数えて（最大36）' })}
       ${fieldNum('base.safe', '安全ライン', { unit: '円', min: 0, note: 'これを下回る日があると警告します' })}
     </div>
@@ -918,7 +1031,10 @@ function addItem(list) {
   const base = M.parseDate(S.base.date) || today();
   const c0 = S.cards[0];
   const id = uid();
-  if (list === 'cards') S.cards.push({ id, name: '新しいカード', close: 15, pay: 10, offset: 1 });
+  if (list === 'cards') S.cards.push({ id, name: '新しいカード', close: 15, pay: 10, offset: 1, account: S.accounts[0].id });
+  if (list === 'accounts') S.accounts.push({ id, name: '新しい口座', balance: 0 });
+  if (list === 'incomes') S.incomes.push({ id, name: '', amount: 0, freq: 'monthly', day: 25, from: M.ym(M.addDays(base, 1)), to: '', date: M.iso(M.addDays(base, 1)), account: S.accounts[0].id });
+  if (list === 'subs') S.subs.push({ id, name: '', amount: 0, cycle: 'monthly', day: base.getDate(), month: base.getMonth() + 1, pay: c0 ? `card:${c0.id}` : `acct:${S.accounts[0].id}`, from: M.ym(base), to: '' });
   if (list === 'bills') S.bills.push({ id, card: c0?.id || '', date: M.iso(c0 ? M.nextPayDate(c0, base) : base), amount: 0, memo: '' });
   if (list === 'loans') S.loans.push({ id, name: '', amount: 0, day: 27, first: M.ym(new Date(base.getFullYear(), base.getMonth() + (base.getDate() >= 27 ? 1 : 0), 1)), count: 12, bonusAmount: 0, bonusM1: 0, bonusM2: 0 });
   if (list === 'recurring') S.recurring.push({ id, card: c0?.id || '', amount: 0, from: M.ym(M.addDays(base, 1)), to: '', memo: '' });
@@ -941,8 +1057,8 @@ async function wipe() {
 
 function toCSV(sim) {
   const q = v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const lines = [['日付', '内容', 'カード', '種類', '出金', '入金', '残高'], [M.iso(sim.start), '基準日の残高', '', '', '', '', S.base.balance]];
-  for (const r of sim.rows) lines.push([M.iso(r.date), r.label, cardName(r.card), KIND[r.kind], r.amount < 0 ? -r.amount : '', r.amount > 0 ? r.amount : '', r.balance]);
+  const lines = [['日付', '内容', 'カード', '種類', '口座', '出金', '入金', '口座の残高', '合計'], [M.iso(sim.start), '基準日の残高', '', '', '', '', '', '', sim.startTotal]];
+  for (const r of sim.rows) lines.push([M.iso(r.date), r.label, cardName(r.card), KIND[r.kind], acctName(r.acct), r.amount < 0 ? -r.amount : '', r.amount > 0 ? r.amount : '', r.acctBalance, r.balance]);
   return '﻿' + lines.map(l => l.map(q).join(',')).join('\r\n');
 }
 
@@ -1088,7 +1204,8 @@ app.addEventListener('click', async e => {
   }
   if (act === 'del') {
     const key = `del:${b.dataset.id}`;
-    if (b.dataset.list === 'cards' && confirmKey !== key) { arm(key); return rerender(); }
+    if (b.dataset.list === 'accounts' && S.accounts.length <= 1) return;
+    if ((b.dataset.list === 'cards' || b.dataset.list === 'accounts') && confirmKey !== key) { arm(key); return rerender(); }
     const arr = listOf(b.dataset.list), i = arr.findIndex(x => x.id === b.dataset.id);
     if (i >= 0) arr.splice(i, 1);
     confirmKey = null; scheduleSave(); return rerender();

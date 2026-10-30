@@ -235,6 +235,9 @@ input.hm { font-family: var(--mono); font-size: 1.05rem; }
 td.unused input { opacity: .45; }
 td.bm { white-space: nowrap; }
 td.bm select.cell { min-width: 5.5em; width: auto; display: inline-block; }
+.bm { white-space: nowrap; }
+.bm small { display: inline !important; margin-left: 3px; }
+.bm input.cell[type="number"] { min-width: 4.5em; width: 4.5em; display: inline-block; }
 
 /* ---- 同期 ---- */
 .syncbar:empty { display: none; }
@@ -250,6 +253,19 @@ code { font-family: var(--mono); font-size: .85em; background: var(--fill); padd
 .join summary { cursor: pointer; font-size: .9rem; }
 .join[open] summary { margin-bottom: 12px; }
 .join-form { display: grid; gap: 12px; }
+
+/* ---- 口座ごとの線 ---- */
+.ch-line.total { stroke-width: 2.5; }
+.ch-acct { fill: none; stroke: var(--sub); stroke-width: 1.5; }
+.ch-acct.a0 { stroke-dasharray: 6 3; }
+.ch-acct.a1 { stroke-dasharray: 2 3; }
+.ch-acct.a2 { stroke-dasharray: 10 3 2 3; }
+.ch-acct.a3 { stroke-dasharray: 1 6; stroke-width: 2.5; }
+.legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: .8rem; color: var(--sub); }
+.legend li { display: flex; align-items: center; gap: 6px; }
+.legend svg { width: 28px; height: 8px; }
+td.sub-n { color: var(--sub); }
+optgroup { font-style: normal; color: var(--sub); }
 
 /* ---- 年間 ---- */
 .years { display: grid; gap: 14px; }

@@ -122,4 +122,41 @@ assert.deepEqual(lr.map(r => [M.iso(r.date), r.amount]), [['2026-10-27', -10000]
 // 回数未定は期間の終わりまで
 assert.equal(M.loanSchedule({ amount: 1, day: 1, first: '2026-11' }, d('2027-01-31')).length, 3);
 
+// 複数口座：カードごとに引き落とし口座、バイトは別口座
+const SA = structuredClone(S);
+SA.accounts = [{ id: 'm', name: 'メイン', balance: 100000 }, { id: 'y', name: 'ゆうちょ', balance: 20226 }];
+SA.job.account = 'y';
+SA.cards.find(c => c.id === 'o').account = 'y';
+const sa = M.simulate(SA);
+const fy = sa.byAccount.find(a => a.id === 'y'), fm = sa.byAccount.find(a => a.id === 'm');
+assert.equal(fy.final + fm.final, sim.final);   // 合計は1口座のときと同じ
+assert.equal(sa.rows.at(-1).balance, sim.rows.at(-1).balance);
+assert.equal(sa.rows.find(r => r.kind === 'income').acct, 'y');
+// メイン口座はバイト代が入らないので、引き落としが続くと最初に足りなくなる
+assert.equal(sa.min.acct, 'm'); assert.ok(sa.min.balance < 0);
+// 口座が未設定の古いデータは base.balance の1口座として扱う
+assert.deepEqual(M.accountsOf({ base: { balance: 5 } }), [{ id: 'main', name: '口座', balance: 5 }]);
+
+// サブスク：毎月10日にメインカード（15日締め翌月13日払い）
+const SB = structuredClone(S); SB.bills = []; SB.recurring = []; SB.purchases = [];
+SB.subs = [{ name: 'Spotify', amount: 980, cycle: 'monthly', day: 10, pay: 'card:a', from: '2026-01' },
+           { name: 'iCloud', amount: 1300, cycle: 'yearly', month: 1, day: 20, pay: 'acct:main' }];
+const sb = M.simulate(SB).rows.filter(r => r.kind === 'sub');
+assert.deepEqual(sb.map(r => [M.iso(r.date), r.amount, r.label]), [
+  ['2026-11-13', -980, 'Spotify（10/10課金）'], ['2026-12-13', -980, 'Spotify（11/10課金）'],
+  ['2027-01-13', -980, 'Spotify（12/10課金）'], ['2027-01-20', -1300, 'iCloud'], ['2027-02-13', -980, 'Spotify（1/10課金）']]);
+assert.equal(M.monthlyCost({ cycle: 'yearly', amount: 1200 }), 100);
+// 確定した請求がある月のカード払いサブスクは請求額に含まれるので重ねない
+SB.bills = [{ card: 'a', date: '2026-12-13', amount: 30000 }];
+assert.equal(M.simulate(SB).rows.filter(r => r.kind === 'sub' && M.iso(r.date) === '2026-12-13').length, 0);
+// 解約月（to）の後は課金しない
+assert.equal(M.subCharges({ day: 10, from: '2026-10', to: '2026-11' }, d('2026-01-01'), d('2027-12-31')).length, 2);
+
+// その他の入金：毎月25日のお小遣いと、1回だけの入金
+const SC = structuredClone(S); SC.bills = []; SC.recurring = []; SC.purchases = []; SC.job.wage = 0;
+SC.incomes = [{ name: 'お小遣い', amount: 10000, freq: 'monthly', day: 25, from: '2026-11', to: '2027-01' },
+              { name: 'お年玉', amount: 30000, freq: 'once', date: '2027-01-01' }];
+const sc = M.simulate(SC).rows.filter(r => r.kind === 'other');
+assert.deepEqual(sc.map(r => [M.iso(r.date), r.amount]), [['2026-11-25', 10000], ['2026-12-25', 10000], ['2027-01-01', 30000], ['2027-01-25', 10000]]);
+
 console.log('all tests passed');
