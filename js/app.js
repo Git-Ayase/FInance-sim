@@ -683,7 +683,7 @@ function viewCards(sim) {
         <td>${delBtn('bills', b, '請求')}</td></tr>`; }).join('')
         : `<tr><td colspan="5" class="empty">まだありません。カードの明細で金額が確定したら追加してください。</td></tr>`}</tbody>
     </table></div>
-    <p class="note">同じカード・同じ月に確定した請求があると、その月の「毎月の見込み」は使わずに確定額で計算します。大きい買い物の分も含んだ請求額を入れたときは、「大きい買い物」からその買い物を消してください。</p>
+    <p class="note">同じカード・同じ月に確定した請求があると、その月の「毎月の見込み」とカード払いのサブスクは使わずに、確定した請求額だけで計算します（サブスク代は請求額に含まれているため）。大きい買い物の分も含んだ請求額を入れたときは、「大きい買い物」からその買い物を消してください。</p>
   </section>
   <section class="block"><div class="head"><h2>毎月の見込み</h2><button type="button" class="btn" data-act="add" data-list="recurring">＋ 見込みを追加</button></div>
     <div class="tablewrap"><table>
@@ -727,7 +727,7 @@ function subSection(base) {
       <td><select id="subs-${u.id}-pay" class="cell" data-list="subs" data-id="${u.id}" data-f="pay" aria-label="支払い方法">${payOptionsHTML(u.pay)}</select></td>
       <td>${cell('subs', u, 'from', `type="month" value="${esc(u.from)}" aria-label="開始月"`)}</td>
       <td>${cell('subs', u, 'to', `type="month" value="${esc(u.to)}" aria-label="解約月"`)}</td>
-      <td class="d">${next ? fmt(next) : '—'}${payOn && card ? `<small>引き落とし ${fmt(payOn)}</small>` : ''}</td>
+      <td class="d">${next ? fmt(next) : '—'}${payOn && card ? `<small>引き落とし ${fmt(payOn)}${S.bills.some(x => x.card === card.id && x.amount && x.date && x.date.slice(0, 7) === M.ym(payOn)) ? '・確定した請求に含む' : ''}</small>` : ''}</td>
       <td class="n">${yen(M.monthlyCost(u))}</td>
       <td>${delBtn('subs', u, u.name || 'サブスク')}</td></tr>`;
   }).join('');
